@@ -1,10 +1,14 @@
 import {
+	App,
 	BasesEntry,
 	BasesPropertyId,
 	BasesView,
+	Modal,
+	Notice,
 	Plugin,
 	QueryController,
 	TFile,
+	TFolder,
 	debounce,
 	setIcon,
 } from "obsidian";
@@ -26,6 +30,9 @@ const P = {
 };
 
 const NO_STATUS = "Ohne Status";
+
+/** Mehr Treffer werden nicht gezeigt — man tippt weiter, statt zu scrollen. */
+const MAX_VISIBLE_CUSTOMERS = 6;
 
 const DEFAULT_STATUS_ORDER = [
 	"Konzeption",
@@ -94,6 +101,44 @@ function formatDate(raw: string): string {
 	return `${match[3]}.${match[2]}.${match[1].slice(2)}`;
 }
 
+/** Kleinschreibung ohne Akzente, damit "Mu" auch "Müller" findet. */
+function foldText(value: string): string {
+	return value
+		.normalize("NFD")
+		.replace(/[̀-ͯ]/g, "")
+		.replace(/ß/g, "ss")
+		.toLowerCase();
+}
+
+function today(): string {
+	const now = new Date();
+	const month = String(now.getMonth() + 1).padStart(2, "0");
+	const day = String(now.getDate()).padStart(2, "0");
+	return `${now.getFullYear()}-${month}-${day}`;
+}
+
+/** Frontmatter für ein neues Projekt — Feldreihenfolge wie in den bestehenden Deckblättern. */
+function newProjectNote(projekt: string, kunde: string, status: string): string {
+	return [
+		"---",
+		`projekt: "${projekt.replace(/"/g, '\\"')}"`,
+		"typ: projekt",
+		`kunde: "${kunde.replace(/"/g, '\\"')}"`,
+		"owner: []",
+		`created: ${today()}`,
+		`fortschritt: ${status === NO_STATUS ? "" : status}`,
+		"ansprechpartner: ",
+		"format: ",
+		"wiedervorlage: ",
+		"deadline: ",
+		"author: []",
+		"tags: []",
+		"---",
+		`# ${projekt}`,
+		"",
+	].join("\n");
+}
+
 function stringArray(value: unknown): string[] {
 	if (!Array.isArray(value)) return [];
 	return value.filter((item): item is string => typeof item === "string");
@@ -123,6 +168,14 @@ class ProjectBoardView extends BasesView {
 	 * Live-Vorschau unter dem Cursor weg.
 	 */
 	private dragging = false;
+
+	/**
+	 * Die View wird beim Zurücknavigieren von der Projektdatei neu gebaut und
+	 * startet dabei ganz links. Einmalig zur ausgewählten Karte scrollen, damit
+	 * sie sichtbar ist — danach nie wieder, sonst reißt es einen beim Arbeiten
+	 * bei jedem Datenupdate aus der Position.
+	 */
+	private restoreScrollPending = true;
 
 	private scheduleRender: () => void;
 
@@ -207,6 +260,21 @@ class ProjectBoardView extends BasesView {
 
 		this.applySelection();
 		this.initSortables();
+		this.restoreScroll();
+	}
+
+	private restoreScroll(): void {
+		if (!this.restoreScrollPending) return;
+		this.restoreScrollPending = false;
+
+		const selected = this.plugin.selectedPath;
+		if (!selected) return;
+
+		// Erst im nächsten Frame — vorher steht die Breite des Boards noch nicht fest.
+		window.requestAnimationFrame(() => {
+			const cardEl = this.boardEl.querySelector(`[data-path="${CSS.escape(selected)}"]`);
+			cardEl?.scrollIntoView({ block: "nearest", inline: "center" });
+		});
 	}
 
 	/**
@@ -246,6 +314,14 @@ class ProjectBoardView extends BasesView {
 		dotEl.style.setProperty("--wwe-hue", STATUS_HUE[status] ?? hueFor(status));
 		headerEl.createSpan({ cls: "wwe-col-title", text: status });
 		headerEl.createSpan({ cls: "wwe-col-count", text: String(entries.length) });
+
+		const addEl = headerEl.createSpan({ cls: "wwe-col-add" });
+		setIcon(addEl, "plus");
+		addEl.setAttribute("aria-label", `Neues Projekt in "${status}"`);
+		addEl.addEventListener("click", (evt) => {
+			evt.stopPropagation();
+			this.openNewProjectModal(status);
+		});
 
 		const bodyEl = colEl.createDiv({ cls: "wwe-col-body" });
 		bodyEl.setAttribute("data-status", status);
@@ -366,6 +442,67 @@ class ProjectBoardView extends BasesView {
 		});
 	}
 
+	// --- Neues Projekt ----------------------------------------------------
+
+	/**
+	 * Die Kundenordner sind die Großeltern der Projektdateien. Liegen alle unter
+	 * demselben Wurzelordner, listen wir dessen Unterordner — dann erscheinen auch
+	 * Kunden, die noch kein Projekt haben.
+	 */
+	private customerFolders(): TFolder[] {
+		const roots = new Map<string, TFolder>();
+		const fromEntries = new Map<string, TFolder>();
+
+		for (const entry of this.data?.data ?? []) {
+			const kundeFolder = entry.file.parent?.parent;
+			if (!kundeFolder) continue;
+			fromEntries.set(kundeFolder.path, kundeFolder);
+			if (kundeFolder.parent) roots.set(kundeFolder.parent.path, kundeFolder.parent);
+		}
+
+		const byName = (a: TFolder, b: TFolder) => a.name.localeCompare(b.name);
+
+		if (roots.size === 1) {
+			const root = Array.from(roots.values())[0];
+			const folders = root.children.filter(
+				(child): child is TFolder => child instanceof TFolder
+			);
+			if (folders.length > 0) return folders.sort(byName);
+		}
+		return Array.from(fromEntries.values()).sort(byName);
+	}
+
+	private openNewProjectModal(status: string): void {
+		new NewProjectModal(this.app, this.customerFolders(), (folder, name) => {
+			void this.createProject(folder, name, status);
+		}).open();
+	}
+
+	private async createProject(
+		folder: TFolder,
+		name: string,
+		status: string
+	): Promise<void> {
+		const projectPath = `${folder.path}/${name}`;
+		if (this.app.vault.getAbstractFileByPath(projectPath)) {
+			new Notice(`"${name}" gibt es bei ${folder.name} schon.`);
+			return;
+		}
+
+		try {
+			await this.app.vault.createFolder(projectPath);
+			const file = await this.app.vault.create(
+				`${projectPath}/_index.md`,
+				newProjectNote(name, folder.name, status)
+			);
+			this.plugin.selectedPath = file.path;
+			await this.app.workspace.getLeaf(false).openFile(file);
+		} catch (error) {
+			new Notice(`Projekt konnte nicht angelegt werden: ${error}`);
+			console.error("WWE Project Board:", error);
+		}
+	}
+
 	// --- Drag and drop ----------------------------------------------------
 
 	private destroySortables(): void {
@@ -379,6 +516,8 @@ class ProjectBoardView extends BasesView {
 				group: "wwe-columns",
 				draggable: ".wwe-col",
 				handle: ".wwe-col-header",
+				filter: ".wwe-col-add",
+				preventOnFilter: false,
 				animation: 150,
 				ghostClass: "wwe-drag-ghost",
 				onStart: () => {
@@ -457,6 +596,184 @@ class ProjectBoardView extends BasesView {
 		await this.app.fileManager.processFrontMatter(file, (frontmatter) => {
 			frontmatter.fortschritt = status === NO_STATUS ? null : status;
 		});
+	}
+}
+
+class NewProjectModal extends Modal {
+	private folders: TFolder[];
+	private onSubmit: (folder: TFolder, name: string) => void;
+
+	private selected: TFolder | null = null;
+	private matches: TFolder[] = [];
+	private activeIndex = 0;
+
+	private customerInput!: HTMLInputElement;
+	private listEl!: HTMLElement;
+	private nameInput!: HTMLInputElement;
+
+	constructor(
+		app: App,
+		folders: TFolder[],
+		onSubmit: (folder: TFolder, name: string) => void
+	) {
+		super(app);
+		this.folders = folders;
+		this.onSubmit = onSubmit;
+	}
+
+	onOpen(): void {
+		this.modalEl.addClass("wwe-modal");
+		this.titleEl.setText("Neues Projekt");
+		const { contentEl } = this;
+
+		if (this.folders.length === 0) {
+			contentEl.createEl("p", {
+				cls: "wwe-modal-hint",
+				text: "Kein Kundenordner gefunden. Das Board braucht mindestens ein bestehendes Projekt, um die Kundenordner zu erkennen.",
+			});
+			return;
+		}
+
+		const customerField = contentEl.createDiv({ cls: "wwe-field" });
+		customerField.createEl("label", { cls: "wwe-field-label", text: "Kunde" });
+		const comboEl = customerField.createDiv({ cls: "wwe-combo" });
+		this.customerInput = comboEl.createEl("input", {
+			cls: "wwe-combo-input",
+			attr: { type: "text", placeholder: "Tippen zum Suchen" },
+		});
+		this.listEl = comboEl.createDiv({ cls: "wwe-combo-list" });
+
+		const nameField = contentEl.createDiv({ cls: "wwe-field" });
+		nameField.createEl("label", { cls: "wwe-field-label", text: "Projektname" });
+		this.nameInput = nameField.createEl("input", {
+			attr: { type: "text", placeholder: "Projekt 10" },
+		});
+
+		const actionsEl = contentEl.createDiv({ cls: "wwe-actions" });
+		actionsEl
+			.createEl("button", { text: "Abbrechen" })
+			.addEventListener("click", () => this.close());
+		actionsEl
+			.createEl("button", { cls: "mod-cta", text: "Anlegen" })
+			.addEventListener("click", () => this.submit());
+
+		this.customerInput.addEventListener("input", () => {
+			this.selected = null;
+			this.refreshMatches();
+		});
+		this.customerInput.addEventListener("keydown", (evt) => this.onComboKeydown(evt));
+		this.nameInput.addEventListener("keydown", (evt) => {
+			if (evt.key !== "Enter") return;
+			evt.preventDefault();
+			this.submit();
+		});
+
+		this.refreshMatches();
+		window.setTimeout(() => this.customerInput.focus(), 0);
+	}
+
+	// --- Kunden-Auswahl ---------------------------------------------------
+
+	private refreshMatches(): void {
+		const query = foldText(this.customerInput.value.trim());
+		this.matches = query
+			? this.folders.filter((folder) => foldText(folder.name).includes(query))
+			: [...this.folders];
+		this.activeIndex = 0;
+		this.renderList();
+	}
+
+	private renderList(): void {
+		this.listEl.empty();
+
+		if (this.matches.length === 0) {
+			this.listEl.createDiv({ cls: "wwe-combo-empty", text: "Kein Treffer" });
+			return;
+		}
+
+		const visible = this.matches.slice(0, MAX_VISIBLE_CUSTOMERS);
+		visible.forEach((folder, index) => {
+			const itemEl = this.listEl.createDiv({
+				cls: "wwe-combo-item",
+				text: folder.name,
+			});
+			itemEl.toggleClass("is-active", index === this.activeIndex);
+			itemEl.toggleClass("is-selected", this.selected?.path === folder.path);
+			// mousedown statt click: sonst verliert das Eingabefeld vorher den Fokus.
+			itemEl.addEventListener("mousedown", (evt) => {
+				evt.preventDefault();
+				this.pick(folder);
+			});
+		});
+
+		const hidden = this.matches.length - visible.length;
+		if (hidden > 0) {
+			this.listEl.createDiv({
+				cls: "wwe-combo-more",
+				text: `+ ${hidden} weitere — weiter tippen`,
+			});
+		}
+	}
+
+	private pick(folder: TFolder): void {
+		this.selected = folder;
+		this.customerInput.value = folder.name;
+		this.refreshMatches();
+		this.nameInput.focus();
+	}
+
+	private onComboKeydown(evt: KeyboardEvent): void {
+		if (evt.key === "ArrowDown" || evt.key === "ArrowUp") {
+			evt.preventDefault();
+			const count = Math.min(this.matches.length, MAX_VISIBLE_CUSTOMERS);
+			if (count === 0) return;
+			const step = evt.key === "ArrowDown" ? 1 : -1;
+			this.activeIndex = (this.activeIndex + step + count) % count;
+			this.renderList();
+			return;
+		}
+
+		if (evt.key === "Enter") {
+			evt.preventDefault();
+			const folder = this.matches[this.activeIndex];
+			if (folder) this.pick(folder);
+		}
+	}
+
+	/** Ohne Klick auf die Liste zählt auch ein exakt eingetippter Kundenname. */
+	private resolveFolder(): TFolder | null {
+		if (this.selected) return this.selected;
+		const query = foldText(this.customerInput.value.trim());
+		if (!query) return null;
+		const exact = this.folders.filter((folder) => foldText(folder.name) === query);
+		return exact.length === 1 ? exact[0] : null;
+	}
+
+	private submit(): void {
+		const folder = this.resolveFolder();
+		if (!folder) {
+			new Notice("Bitte einen Kunden auswählen.");
+			this.customerInput.focus();
+			return;
+		}
+
+		const name = this.nameInput.value.trim();
+		if (!name) {
+			new Notice("Bitte einen Projektnamen angeben.");
+			this.nameInput.focus();
+			return;
+		}
+		if (/[\\/:]/.test(name)) {
+			new Notice("Der Projektname darf kein / \\ oder : enthalten.");
+			return;
+		}
+
+		this.close();
+		this.onSubmit(folder, name);
+	}
+
+	onClose(): void {
+		this.contentEl.empty();
 	}
 }
 

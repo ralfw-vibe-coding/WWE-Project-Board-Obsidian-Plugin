@@ -59,6 +59,28 @@
 	color: var(--text-muted);
 }
 
+.wwe-col-add {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	width: 20px;
+	height: 20px;
+	border-radius: var(--radius-s, 4px);
+	color: var(--text-faint);
+	cursor: pointer;
+	flex-shrink: 0;
+}
+
+.wwe-col-add:hover {
+	color: var(--text-normal);
+	background: var(--background-modifier-border);
+}
+
+.wwe-col-add svg {
+	width: 14px;
+	height: 14px;
+}
+
 .wwe-col-body {
 	display: flex;
 	flex-direction: column;
@@ -249,4 +271,89 @@
 
 .wwe-badge-dl {
 	--wwe-hue: #D8483A;
+}
+
+/* --- Dialog "Neues Projekt" --- */
+
+.wwe-modal {
+	width: 330px;
+	max-width: 92vw;
+	height: auto;
+	max-height: none;
+}
+
+/* Sonst deckelt der scrollende Modal-Inhalt den Dialog und schneidet die
+   Kundenliste ab. */
+.wwe-modal .modal-content {
+	max-height: none;
+	overflow: visible;
+}
+
+.wwe-modal-hint {
+	font-size: var(--font-ui-small);
+	color: var(--text-muted);
+	margin: 0;
+}
+
+.wwe-field {
+	margin-bottom: var(--size-4-3);
+}
+
+.wwe-field-label {
+	display: block;
+	font-size: var(--font-ui-smaller);
+	color: var(--text-muted);
+	margin-bottom: var(--size-2-2);
+}
+
+.wwe-field input[type="text"] {
+	width: 100%;
+}
+
+/* Die Liste steht fest im Dialog statt als Overlay: ein absolut positioniertes
+   Dropdown wird vom Modal abgeschnitten. Sie scrollt auch nicht — es werden nur
+   die ersten Treffer gezeigt, man tippt weiter statt zu scrollen. */
+.wwe-combo-list {
+	margin-top: var(--size-2-2);
+	padding: 4px;
+	background: var(--background-primary-alt);
+	border: 1px solid var(--background-modifier-border);
+	border-radius: var(--radius-m, 8px);
+}
+
+.wwe-combo-more {
+	padding: 5px 8px;
+	font-size: var(--font-ui-smaller);
+	color: var(--text-faint);
+}
+
+.wwe-combo-item {
+	padding: 5px 8px;
+	border-radius: var(--radius-s, 4px);
+	font-size: var(--font-ui-small);
+	color: var(--text-normal);
+	cursor: pointer;
+}
+
+.wwe-combo-item:hover,
+.wwe-combo-item.is-active {
+	background: var(--background-modifier-hover);
+}
+
+.wwe-combo-item.is-selected {
+	color: var(--text-accent);
+	font-weight: 600;
+}
+
+.wwe-combo-empty {
+	padding: 5px 8px;
+	font-size: var(--font-ui-small);
+	color: var(--text-muted);
+}
+
+.wwe-actions {
+	display: flex;
+	justify-content: flex-end;
+	gap: var(--size-2-3);
+	margin-top: var(--size-4-4);
 }
