@@ -1,0 +1,22 @@
+{
+	"name": "wwe-project-board",
+	"version": "0.1.0",
+	"description": "Zeigt Base-Views als Projekt-Board mit Karten an.",
+	"main": "main.js",
+	"scripts": {
+		"dev": "node esbuild.config.mjs",
+		"build": "node esbuild.config.mjs production"
+	},
+	"license": "MIT",
+	"devDependencies": {
+		"@types/node": "^22.0.0",
+		"@types/sortablejs": "^1.15.9",
+		"builtin-modules": "4.0.0",
+		"esbuild": "0.24.0",
+		"obsidian": "latest",
+		"typescript": "5.7.2"
+	},
+	"dependencies": {
+		"sortablejs": "^1.15.7"
+	}
+}
