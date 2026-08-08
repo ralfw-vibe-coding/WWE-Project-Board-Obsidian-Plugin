@@ -264,10 +264,24 @@ function renderBadge(
 	badgeEl.createSpan({ text: formatDate(raw) });
 }
 
+/**
+ * Der Kundenordner ist der Elternordner des Projektordners. Den nehmen wir
+ * statt einer Suche über den Namen — der Ordner ist die Wahrheit, der Name im
+ * Frontmatter kann davon abgewichen sein.
+ */
+function customerIndexOf(file: TFile): TFile | null {
+	const index = file.parent?.parent?.children.find(
+		(candidate): candidate is TFile =>
+			candidate instanceof TFile && candidate.name === "_index.md"
+	);
+	return index ?? null;
+}
+
 function renderProjectCard(
 	parentEl: HTMLElement,
 	card: CardModel,
-	onOpen: () => void
+	onOpen: () => void,
+	onChip?: () => void
 ): HTMLElement {
 	const cardEl = parentEl.createDiv({ cls: "wwe-card" });
 	cardEl.setAttribute("data-path", card.path);
@@ -276,6 +290,15 @@ function renderProjectCard(
 	if (card.chip) {
 		const chipEl = headEl.createSpan({ cls: "wwe-chip", text: card.chip });
 		chipEl.style.setProperty("--wwe-hue", card.chipHue);
+		if (onChip) {
+			chipEl.addClass("is-link");
+			chipEl.setAttribute("aria-label", `Zur Seite von ${card.chip}`);
+			chipEl.addEventListener("click", (evt) => {
+				evt.preventDefault();
+				evt.stopPropagation();
+				onChip();
+			});
+		}
 	}
 	if (card.drift.length > 0) {
 		const warnEl = headEl.createSpan({ cls: "wwe-warn" });
@@ -705,8 +728,20 @@ class ProjectBoardView extends BasesView {
 			() => {
 				this.select(entry.file.path);
 				void this.app.workspace.getLeaf(false).openFile(entry.file);
-			}
+			},
+			() => this.openCustomer(entry.file, kunde)
 		);
+	}
+
+	/** Die Karte bleibt markiert, damit man beim Zurückkehren sieht, wo man war. */
+	private openCustomer(projectFile: TFile, kunde: string): void {
+		const index = customerIndexOf(projectFile);
+		if (!index) {
+			new Notice(`Für "${kunde}" gibt es keine _index.md.`);
+			return;
+		}
+		this.select(projectFile.path);
+		void this.app.workspace.getLeaf(false).openFile(index);
 	}
 
 	// --- Auswahl ----------------------------------------------------------
@@ -1258,16 +1293,8 @@ export default class WweProjectBoardPlugin extends Plugin {
 		return headerEl;
 	}
 
-	/**
-	 * Der Kundenordner ist der Elternordner des Projektordners. Den nehmen wir
-	 * statt einer Suche über den Namen — der Ordner ist die Wahrheit.
-	 */
 	private openCustomer(projectFile: TFile, kunde: string): void {
-		const customerFolder = projectFile.parent?.parent;
-		const index = customerFolder?.children.find(
-			(candidate): candidate is TFile =>
-				candidate instanceof TFile && candidate.name === "_index.md"
-		);
+		const index = customerIndexOf(projectFile);
 		if (!index) {
 			new Notice(`Für "${kunde}" gibt es keine _index.md.`);
 			return;

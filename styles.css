@@ -298,6 +298,14 @@
 	text-overflow: ellipsis;
 }
 
+.wwe-chip.is-link {
+	cursor: pointer;
+}
+
+.wwe-chip.is-link:hover {
+	background: color-mix(in srgb, var(--wwe-hue) 25%, transparent);
+}
+
 .wwe-warn {
 	display: inline-flex;
 	color: var(--text-warning);
