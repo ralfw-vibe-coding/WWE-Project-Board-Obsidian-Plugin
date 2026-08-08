@@ -41,11 +41,37 @@ const MAX_VISIBLE_CUSTOMERS = 6;
  */
 const LOCAL_STATE_PREFIX = "wwe-project-board:";
 
-/** Deckblatt-Ansicht: Dateikopf ausblenden, eigene Kopfzeile einsetzen. */
+/** Deckblatt-Ansicht: Dateikopf ausblenden, eigene Kopfzeile und Panel einsetzen. */
 const COVER_CLASS = "wwe-cover";
 const COVER_CHROME_CLASS = "wwe-cover-chrome";
+const COVER_PANEL_OPEN_CLASS = "wwe-cover-panel-open";
 const COVER_HEADER_CLASS = "wwe-cover-header";
+const COVER_PANEL_CLASS = "wwe-cover-panel";
 const SHOW_CHROME_KEY = "wwe-project-board:show-file-chrome";
+const SHOW_PANEL_KEY = "wwe-project-board:show-cover-panel";
+
+type CoverFieldKind = "text" | "date" | "list" | "select";
+
+interface CoverField {
+	key: string;
+	label: string;
+	kind: CoverFieldKind;
+}
+
+/** "typ" fehlt bewusst: der ist strukturell und darf nicht aus Versehen kippen. */
+const COVER_FIELDS: CoverField[] = [
+	{ key: "projekt", label: "Projekt", kind: "text" },
+	{ key: "kunde", label: "Kunde", kind: "text" },
+	{ key: "fortschritt", label: "Fortschritt", kind: "select" },
+	{ key: "owner", label: "Owner", kind: "list" },
+	{ key: "ansprechpartner", label: "Ansprechpartner", kind: "text" },
+	{ key: "format", label: "Format", kind: "text" },
+	{ key: "wiedervorlage", label: "Wiedervorlage", kind: "date" },
+	{ key: "deadline", label: "Deadline", kind: "date" },
+	{ key: "created", label: "Angelegt", kind: "date" },
+	{ key: "author", label: "Angelegt von", kind: "list" },
+	{ key: "tags", label: "Tags", kind: "list" },
+];
 
 const ZOOM_MIN = 50;
 const ZOOM_MAX = 130;
@@ -152,7 +178,6 @@ function newProjectNote(projekt: string, kunde: string, status: string): string 
 		"author: []",
 		"tags: []",
 		"---",
-		`# ${projekt}`,
 		"",
 	].join("\n");
 }
@@ -980,8 +1005,11 @@ export default class WweProjectBoardPlugin extends Plugin {
 	/** Zuletzt angeklickte Karte — überlebt das Wegnavigieren zur Projektdatei. */
 	selectedPath: string | null = null;
 
-	/** Ob Dateiname und Eigenschaften im Deckblatt sichtbar sind. Pro Gerät. */
+	/** Ob Obsidians roher Dateikopf im Deckblatt sichtbar ist. Pro Gerät. */
 	private showChrome = false;
+
+	/** Ob das Eigenschaften-Panel links aufgeklappt ist. Pro Gerät. */
+	private showPanel = false;
 
 	async onload(): Promise<void> {
 		this.registerBasesView(VIEW_TYPE, {
@@ -992,10 +1020,17 @@ export default class WweProjectBoardPlugin extends Plugin {
 		});
 
 		this.showChrome = this.app.loadLocalStorage(SHOW_CHROME_KEY) === true;
+		this.showPanel = this.app.loadLocalStorage(SHOW_PANEL_KEY) === true;
+
+		this.addCommand({
+			id: "toggle-cover-panel",
+			name: "Deckblatt: Eigenschaften-Panel ein-/ausklappen",
+			callback: () => this.togglePanel(),
+		});
 
 		this.addCommand({
 			id: "toggle-cover-chrome",
-			name: "Deckblatt: Dateiname und Eigenschaften ein-/ausblenden",
+			name: "Deckblatt: Obsidians Dateikopf ein-/ausblenden",
 			callback: () => this.toggleChrome(),
 		});
 
@@ -1029,28 +1064,45 @@ export default class WweProjectBoardPlugin extends Plugin {
 	private toggleChrome(): void {
 		this.showChrome = !this.showChrome;
 		this.app.saveLocalStorage(SHOW_CHROME_KEY, this.showChrome);
-		this.decorateAll();
+		this.decorateAll(true);
 	}
 
-	private decorateAll(): void {
+	private togglePanel(): void {
+		this.showPanel = !this.showPanel;
+		this.app.saveLocalStorage(SHOW_PANEL_KEY, this.showPanel);
+		this.decorateAll(true);
+	}
+
+	private decorateAll(rebuild = false): void {
 		for (const view of this.markdownViews()) {
 			const file = view.file;
-			if (file && this.isCover(file)) this.decorate(view, file);
+			if (file && this.isCover(file)) this.decorate(view, file, rebuild);
 			else this.undecorate(view);
 		}
 	}
 
-	private decorate(view: MarkdownView, file: TFile): void {
+	private decorate(view: MarkdownView, file: TFile, rebuild: boolean): void {
 		const { contentEl } = view;
 		contentEl.addClass(COVER_CLASS);
 		contentEl.toggleClass(COVER_CHROME_CLASS, this.showChrome);
+		contentEl.toggleClass(COVER_PANEL_OPEN_CLASS, this.showPanel);
 
-		// Obsidian baut den Inhalt beim Moduswechsel neu auf, deshalb wird die
-		// Kopfzeile bei jedem Durchlauf neu erzeugt statt nur einmal.
-		contentEl.querySelector(`.${COVER_HEADER_CLASS}`)?.remove();
-		const headerEl = createDiv({ cls: COVER_HEADER_CLASS });
-		contentEl.prepend(headerEl);
+		const headerEl = contentEl.querySelector<HTMLElement>(`.${COVER_HEADER_CLASS}`);
+		const panelEl = contentEl.querySelector<HTMLElement>(`.${COVER_PANEL_CLASS}`);
 
+		// Nur neu aufbauen, wenn nötig. Sonst würde jede Frontmatter-Änderung —
+		// also auch die eigene — dem Nutzer das Eingabefeld unter den Fingern
+		// wegreißen, während er tippt.
+		const stale = !headerEl || !panelEl || headerEl.dataset.path !== file.path;
+		if (!stale && !rebuild) return;
+
+		headerEl?.remove();
+		panelEl?.remove();
+		this.buildPanel(contentEl, file);
+		this.buildHeader(contentEl, file);
+	}
+
+	private buildHeader(contentEl: HTMLElement, file: TFile): void {
 		const frontmatter = this.app.metadataCache.getFileCache(file)?.frontmatter ?? {};
 		const projekt =
 			typeof frontmatter.projekt === "string" && frontmatter.projekt
@@ -1061,19 +1113,107 @@ export default class WweProjectBoardPlugin extends Plugin {
 				? frontmatter.kunde
 				: file.parent?.parent?.name ?? "";
 
-		const titleEl = headerEl.createDiv({ cls: "wwe-cover-heading" });
-		if (kunde) titleEl.createSpan({ cls: "wwe-cover-kunde", text: kunde });
-		titleEl.createSpan({ cls: "wwe-cover-title", text: projekt });
+		const headerEl = createDiv({ cls: COVER_HEADER_CLASS });
+		headerEl.dataset.path = file.path;
+		contentEl.prepend(headerEl);
 
 		const toggleEl = headerEl.createSpan({ cls: "wwe-cover-toggle" });
-		setIcon(toggleEl, this.showChrome ? "chevron-up" : "sliders-horizontal");
+		setIcon(toggleEl, this.showPanel ? "panel-left-close" : "panel-left-open");
 		toggleEl.setAttribute(
 			"aria-label",
-			this.showChrome
-				? "Dateiname und Eigenschaften ausblenden"
-				: "Dateiname und Eigenschaften anzeigen"
+			this.showPanel ? "Eigenschaften einklappen" : "Eigenschaften ausklappen"
 		);
-		toggleEl.addEventListener("click", () => this.toggleChrome());
+		toggleEl.addEventListener("click", () => this.togglePanel());
+
+		if (kunde) {
+			const kundeEl = headerEl.createSpan({ cls: "wwe-cover-kunde", text: kunde });
+			kundeEl.style.setProperty("--wwe-hue", hueFor(kunde));
+		}
+		headerEl.createSpan({ cls: "wwe-cover-title", text: projekt });
+	}
+
+	private buildPanel(contentEl: HTMLElement, file: TFile): void {
+		const panelEl = createDiv({ cls: COVER_PANEL_CLASS });
+		contentEl.prepend(panelEl);
+		if (!this.showPanel) return;
+
+		const frontmatter = this.app.metadataCache.getFileCache(file)?.frontmatter ?? {};
+		for (const field of COVER_FIELDS) {
+			this.buildField(panelEl, file, field, frontmatter[field.key]);
+		}
+	}
+
+	private buildField(
+		panelEl: HTMLElement,
+		file: TFile,
+		field: CoverField,
+		raw: unknown
+	): void {
+		const fieldEl = panelEl.createDiv({ cls: "wwe-cover-field" });
+		fieldEl.createEl("label", { cls: "wwe-cover-label", text: field.label });
+
+		if (field.kind === "select") {
+			const selectEl = fieldEl.createEl("select");
+			const current = typeof raw === "string" ? raw : "";
+			const options = [...DEFAULT_STATUS_ORDER];
+			if (current && !options.includes(current)) options.push(current);
+			selectEl.createEl("option", { value: "", text: "—" });
+			for (const option of options) {
+				selectEl.createEl("option", { value: option, text: option });
+			}
+			selectEl.value = current;
+			selectEl.addEventListener("change", () => {
+				void this.writeFrontmatter(file, field.key, selectEl.value || null);
+			});
+			return;
+		}
+
+		const inputEl = fieldEl.createEl("input", {
+			attr: { type: field.kind === "date" ? "date" : "text" },
+		});
+
+		if (field.kind === "list") {
+			inputEl.value = Array.isArray(raw) ? raw.map(String).join(", ") : String(raw ?? "");
+			inputEl.placeholder = "durch Komma getrennt";
+		} else {
+			inputEl.value = raw === null || raw === undefined ? "" : String(raw);
+		}
+
+		const commit = () => {
+			if (field.kind === "list") {
+				const parts = inputEl.value
+					.split(/\s*,\s*/)
+					.map((part) => part.trim())
+					.filter(Boolean);
+				void this.writeFrontmatter(file, field.key, parts.length > 0 ? parts : null);
+				return;
+			}
+			void this.writeFrontmatter(file, field.key, inputEl.value.trim() || null);
+		};
+
+		// Datum meldet sich über change, Text erst beim Verlassen — sonst würde
+		// nach jedem Tastendruck in die Datei geschrieben.
+		inputEl.addEventListener(field.kind === "date" ? "change" : "blur", commit);
+		inputEl.addEventListener("keydown", (evt) => {
+			if (evt.key !== "Enter") return;
+			evt.preventDefault();
+			inputEl.blur();
+		});
+	}
+
+	private async writeFrontmatter(
+		file: TFile,
+		key: string,
+		value: unknown
+	): Promise<void> {
+		try {
+			await this.app.fileManager.processFrontMatter(file, (frontmatter) => {
+				frontmatter[key] = value;
+			});
+		} catch (error) {
+			new Notice(`Eigenschaft konnte nicht gespeichert werden: ${error}`);
+			console.error("WWE Project Board:", error);
+		}
 	}
 
 	private undecorate(view: MarkdownView): void {
@@ -1081,6 +1221,8 @@ export default class WweProjectBoardPlugin extends Plugin {
 		if (!contentEl.hasClass(COVER_CLASS)) return;
 		contentEl.removeClass(COVER_CLASS);
 		contentEl.removeClass(COVER_CHROME_CLASS);
+		contentEl.removeClass(COVER_PANEL_OPEN_CLASS);
 		contentEl.querySelector(`.${COVER_HEADER_CLASS}`)?.remove();
+		contentEl.querySelector(`.${COVER_PANEL_CLASS}`)?.remove();
 	}
 }

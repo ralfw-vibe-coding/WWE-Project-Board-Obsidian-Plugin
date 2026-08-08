@@ -452,31 +452,72 @@
 	display: none !important;
 }
 
+/* Raster statt Spalte, damit das Panel links neben dem Editor stehen kann,
+   ohne Obsidians eigene Elemente im DOM zu verschieben. */
+.wwe-cover {
+	display: grid;
+	grid-template-columns: auto minmax(0, 1fr);
+	grid-template-rows: auto minmax(0, 1fr);
+}
+
 .wwe-cover-header {
+	grid-column: 1 / -1;
+	grid-row: 1;
 	display: flex;
 	align-items: center;
 	gap: var(--size-4-2);
-	padding: var(--size-4-3) var(--size-4-6) var(--size-2-2);
-	flex-shrink: 0;
+	padding: var(--size-4-2) var(--size-4-4) var(--size-2-2);
+	border-bottom: 1px solid var(--background-modifier-border);
 }
 
-.wwe-cover-heading {
-	display: flex;
-	align-items: baseline;
-	gap: var(--size-2-3);
+.wwe-cover > .markdown-source-view,
+.wwe-cover > .markdown-reading-view {
+	grid-column: 2;
+	grid-row: 2;
 	min-width: 0;
 }
 
-.wwe-cover-kunde {
-	font-size: var(--font-ui-small);
-	color: var(--text-muted);
-	white-space: nowrap;
+.wwe-cover-panel {
+	grid-column: 1;
+	grid-row: 2;
+	display: none;
+	width: 250px;
+	overflow-y: auto;
+	padding: var(--size-4-3);
+	border-right: 1px solid var(--background-modifier-border);
+	background: var(--background-secondary);
 }
 
-.wwe-cover-kunde::after {
-	content: "·";
-	margin-left: var(--size-2-3);
-	color: var(--text-faint);
+.wwe-cover.wwe-cover-panel-open .wwe-cover-panel {
+	display: block;
+}
+
+.wwe-cover-field {
+	margin-bottom: var(--size-4-2);
+}
+
+.wwe-cover-label {
+	display: block;
+	font-size: var(--font-ui-smaller);
+	color: var(--text-muted);
+	margin-bottom: 2px;
+}
+
+.wwe-cover-field input,
+.wwe-cover-field select {
+	width: 100%;
+	font-size: var(--font-ui-small);
+}
+
+.wwe-cover-kunde {
+	font-size: var(--font-ui-smaller);
+	line-height: 18px;
+	padding: 0 8px;
+	border-radius: 999px;
+	background: color-mix(in srgb, var(--wwe-hue) 13%, transparent);
+	color: var(--wwe-hue);
+	white-space: nowrap;
+	flex-shrink: 0;
 }
 
 .wwe-cover-title {
@@ -494,7 +535,6 @@
 	justify-content: center;
 	width: 24px;
 	height: 24px;
-	margin-left: auto;
 	border-radius: var(--radius-s, 4px);
 	color: var(--text-faint);
 	cursor: pointer;
