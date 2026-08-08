@@ -34,6 +34,17 @@ const NO_STATUS = "Ohne Status";
 /** Mehr Treffer werden nicht gezeigt — man tippt weiter, statt zu scrollen. */
 const MAX_VISIBLE_CUSTOMERS = 6;
 
+/**
+ * Eingeklappte Spalten und Zoom gehören dem Gerät, nicht der Base: sie landen
+ * im localStorage der Vault und werden nie mitsynchronisiert.
+ */
+const LOCAL_STATE_PREFIX = "wwe-project-board:";
+
+const ZOOM_MIN = 50;
+const ZOOM_MAX = 130;
+const ZOOM_STEP = 10;
+const ZOOM_DEFAULT = 100;
+
 const DEFAULT_STATUS_ORDER = [
 	"Konzeption",
 	"Angeboten",
@@ -158,10 +169,21 @@ class ProjectBoardView extends BasesView {
 	boardEl: HTMLElement;
 	plugin: WweProjectBoardPlugin;
 
+	private rootEl: HTMLElement;
+	private toolbarEl: HTMLElement;
+	private filterInput!: HTMLInputElement;
+	private searchEl!: HTMLElement;
+	private countEl!: HTMLElement;
+	private zoomLabelEl!: HTMLElement;
+
 	private sortables: Sortable[] = [];
 	private prefsLoaded = false;
 	private columnOrderPref: string[] = [];
 	private cardOrderPref: Record<string, string[]> = {};
+
+	private filterQuery = "";
+	private collapsed = new Set<string>();
+	private zoom = ZOOM_DEFAULT;
 
 	/**
 	 * Während eines Drags nicht neu rendern — sonst reißt Sortable die
@@ -186,7 +208,13 @@ class ProjectBoardView extends BasesView {
 	) {
 		super(controller);
 		this.plugin = plugin;
-		this.boardEl = containerEl.createDiv({ cls: "wwe-board" });
+
+		this.rootEl = containerEl.createDiv({ cls: "wwe-root" });
+		this.toolbarEl = this.rootEl.createDiv({ cls: "wwe-toolbar" });
+		this.boardEl = this.rootEl.createDiv({ cls: "wwe-board" });
+		// Die Leiste wird einmalig gebaut: ein Neuaufbau bei jedem Render würde
+		// beim Tippen den Fokus aus dem Filterfeld reißen.
+		this.buildToolbar();
 
 		this.boardEl.addEventListener("click", (evt) => {
 			const target = evt.target;
@@ -207,13 +235,143 @@ class ProjectBoardView extends BasesView {
 		this.destroySortables();
 	}
 
+	// --- Leiste über den Spalten ------------------------------------------
+
+	private buildToolbar(): void {
+		this.searchEl = this.toolbarEl.createDiv({ cls: "wwe-search" });
+		setIcon(this.searchEl.createSpan({ cls: "wwe-search-icon" }), "search");
+		this.filterInput = this.searchEl.createEl("input", {
+			cls: "wwe-search-input",
+			attr: { type: "text", placeholder: "In allen Eigenschaften filtern" },
+		});
+		const clearEl = this.searchEl.createSpan({ cls: "wwe-search-clear" });
+		setIcon(clearEl, "x");
+		clearEl.setAttribute("aria-label", "Filter zurücksetzen");
+		clearEl.addEventListener("click", () => this.clearFilter());
+
+		this.filterInput.addEventListener("input", () => {
+			this.filterQuery = this.filterInput.value;
+			this.searchEl.toggleClass("has-query", this.filterQuery.length > 0);
+			this.scheduleRender();
+		});
+		this.filterInput.addEventListener("keydown", (evt) => {
+			if (evt.key !== "Escape" || !this.filterQuery) return;
+			// Ohne stopPropagation würde Obsidian den Fokus aus der View nehmen.
+			evt.preventDefault();
+			evt.stopPropagation();
+			this.clearFilter();
+		});
+
+		this.countEl = this.toolbarEl.createSpan({ cls: "wwe-toolbar-count" });
+
+		const zoomEl = this.toolbarEl.createDiv({ cls: "wwe-zoom" });
+		const outEl = zoomEl.createSpan({ cls: "wwe-zoom-btn" });
+		setIcon(outEl, "minus");
+		outEl.setAttribute("aria-label", "Kleiner");
+		outEl.addEventListener("click", () => this.setZoom(this.zoom - ZOOM_STEP));
+
+		this.zoomLabelEl = zoomEl.createSpan({ cls: "wwe-zoom-label" });
+
+		const inEl = zoomEl.createSpan({ cls: "wwe-zoom-btn" });
+		setIcon(inEl, "plus");
+		inEl.setAttribute("aria-label", "Größer");
+		inEl.addEventListener("click", () => this.setZoom(this.zoom + ZOOM_STEP));
+
+		this.applyZoom();
+	}
+
+	private clearFilter(): void {
+		this.filterQuery = "";
+		this.filterInput.value = "";
+		this.searchEl.removeClass("has-query");
+		this.render();
+		this.filterInput.focus();
+	}
+
+	/** Sucht über alle Frontmatter-Eigenschaften plus die beiden Ordnernamen. */
+	private matchesFilter(entry: BasesEntry): boolean {
+		const query = foldText(this.filterQuery.trim());
+		if (!query) return true;
+
+		const parts: string[] = [];
+		for (const prop of this.allProperties ?? []) {
+			if (!prop.startsWith("note.")) continue;
+			const value = entry.getValue(prop);
+			if (value && value.isTruthy()) parts.push(value.toString());
+		}
+		parts.push(entry.file.parent?.name ?? "");
+		parts.push(entry.file.parent?.parent?.name ?? "");
+
+		return foldText(parts.join(" ")).includes(query);
+	}
+
+	private updateCount(shown: number, total: number): void {
+		this.countEl.setText(shown === total ? "" : `${shown} von ${total}`);
+	}
+
+	private setZoom(value: number): void {
+		const stepped = Math.round(value / ZOOM_STEP) * ZOOM_STEP;
+		const next = Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, stepped));
+		if (next === this.zoom) return;
+		this.zoom = next;
+		this.applyZoom();
+		this.saveLocalState();
+	}
+
+	private applyZoom(): void {
+		this.boardEl.style.setProperty("zoom", String(this.zoom / 100));
+		this.zoomLabelEl.setText(`${this.zoom}%`);
+	}
+
 	// --- Persistenz -------------------------------------------------------
 
 	private loadPrefs(): void {
 		if (this.prefsLoaded) return;
 		this.columnOrderPref = stringArray(this.config?.get("columnOrder"));
 		this.cardOrderPref = orderMap(this.config?.get("cardOrder"));
+		this.loadLocalState();
 		this.prefsLoaded = true;
+	}
+
+	/**
+	 * Die Base-Datei ist über die API nicht zu erfragen, für den localStorage
+	 * braucht es aber einen stabilen Schlüssel. Deshalb bekommt die View eine
+	 * eigene Kennung in der .base-Datei — aber erst, wenn wirklich etwas zu
+	 * speichern ist, damit unberührte Bases sauber bleiben.
+	 */
+	private boardId(): string {
+		const id = this.config?.get("boardId");
+		return typeof id === "string" ? id : "";
+	}
+
+	private ensureBoardId(): string {
+		const existing = this.boardId();
+		if (existing) return existing;
+		const id = `b${Date.now().toString(36)}${Math.floor(Math.random() * 1e8).toString(36)}`;
+		this.config?.set("boardId", id);
+		return id;
+	}
+
+	private loadLocalState(): void {
+		const id = this.boardId();
+		if (!id) return;
+
+		const raw = this.app.loadLocalStorage(LOCAL_STATE_PREFIX + id);
+		if (!raw || typeof raw !== "object") return;
+
+		const state = raw as { collapsed?: unknown; zoom?: unknown };
+		this.collapsed = new Set(stringArray(state.collapsed));
+		if (typeof state.zoom === "number") {
+			this.zoom = Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, state.zoom));
+		}
+		this.applyZoom();
+	}
+
+	private saveLocalState(): void {
+		this.app.saveLocalStorage(LOCAL_STATE_PREFIX + this.ensureBoardId(), {
+			collapsed: Array.from(this.collapsed),
+			zoom: this.zoom,
+		});
 	}
 
 	/**
@@ -237,11 +395,21 @@ class ProjectBoardView extends BasesView {
 		this.destroySortables();
 		this.boardEl.empty();
 
-		const entries: BasesEntry[] = this.data?.data ?? [];
-		if (entries.length === 0) {
+		const all: BasesEntry[] = this.data?.data ?? [];
+		const entries = all.filter((entry) => this.matchesFilter(entry));
+		this.updateCount(entries.length, all.length);
+
+		if (all.length === 0) {
 			this.boardEl.createDiv({
 				cls: "wwe-board-empty",
 				text: "Keine Projekte gefunden.",
+			});
+			return;
+		}
+		if (entries.length === 0) {
+			this.boardEl.createDiv({
+				cls: "wwe-board-empty",
+				text: `Kein Treffer für "${this.filterQuery.trim()}".`,
 			});
 			return;
 		}
@@ -306,14 +474,31 @@ class ProjectBoardView extends BasesView {
 	}
 
 	private renderColumn(status: string, entries: BasesEntry[]): void {
+		const collapsed = this.collapsed.has(status);
+
 		const colEl = this.boardEl.createDiv({ cls: "wwe-col" });
+		colEl.toggleClass("is-collapsed", collapsed);
 		colEl.setAttribute("data-status", status);
 
 		const headerEl = colEl.createDiv({ cls: "wwe-col-header" });
+
+		const toggleEl = headerEl.createSpan({ cls: "wwe-col-toggle" });
+		setIcon(toggleEl, collapsed ? "chevron-right" : "chevron-down");
+		toggleEl.setAttribute(
+			"aria-label",
+			collapsed ? "Spalte ausklappen" : "Spalte einklappen"
+		);
+		toggleEl.addEventListener("click", (evt) => {
+			evt.stopPropagation();
+			this.toggleColumn(status);
+		});
+
 		const dotEl = headerEl.createSpan({ cls: "wwe-col-dot" });
 		dotEl.style.setProperty("--wwe-hue", STATUS_HUE[status] ?? hueFor(status));
 		headerEl.createSpan({ cls: "wwe-col-title", text: status });
 		headerEl.createSpan({ cls: "wwe-col-count", text: String(entries.length) });
+
+		if (collapsed) return;
 
 		const addEl = headerEl.createSpan({ cls: "wwe-col-add" });
 		setIcon(addEl, "plus");
@@ -328,6 +513,13 @@ class ProjectBoardView extends BasesView {
 		for (const entry of entries) {
 			this.renderCard(bodyEl, entry);
 		}
+	}
+
+	private toggleColumn(status: string): void {
+		if (this.collapsed.has(status)) this.collapsed.delete(status);
+		else this.collapsed.add(status);
+		this.saveLocalState();
+		this.render();
 	}
 
 	private renderCard(parentEl: HTMLElement, entry: BasesEntry): void {
@@ -516,7 +708,7 @@ class ProjectBoardView extends BasesView {
 				group: "wwe-columns",
 				draggable: ".wwe-col",
 				handle: ".wwe-col-header",
-				filter: ".wwe-col-add",
+				filter: ".wwe-col-add, .wwe-col-toggle",
 				preventOnFilter: false,
 				animation: 150,
 				ghostClass: "wwe-drag-ghost",
