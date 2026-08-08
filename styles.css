@@ -286,7 +286,7 @@
 	margin-bottom: var(--size-2-2);
 }
 
-.wwe-kunde {
+.wwe-chip {
 	font-size: 11px;
 	line-height: 16px;
 	padding: 0 6px;
@@ -456,7 +456,7 @@
    ohne Obsidians eigene Elemente im DOM zu verschieben. */
 .wwe-cover {
 	display: grid;
-	grid-template-columns: auto minmax(0, 1fr);
+	grid-template-columns: auto minmax(0, 1fr) auto;
 	grid-template-rows: auto minmax(0, 1fr);
 }
 
@@ -507,6 +507,85 @@
 .wwe-cover-field select {
 	width: 100%;
 	font-size: var(--font-ui-small);
+}
+
+.wwe-cover-lockrow {
+	display: flex;
+	align-items: center;
+	gap: var(--size-2-2);
+}
+
+.wwe-cover-lockrow input[readonly] {
+	background: transparent;
+	color: var(--text-muted);
+	box-shadow: none;
+	cursor: default;
+}
+
+.wwe-cover-lock {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	width: 22px;
+	height: 22px;
+	flex-shrink: 0;
+	border-radius: var(--radius-s, 4px);
+	color: var(--text-faint);
+	cursor: pointer;
+}
+
+.wwe-cover-lock:hover {
+	color: var(--text-normal);
+	background: var(--background-modifier-hover);
+}
+
+.wwe-cover-lock.is-open {
+	color: var(--text-accent);
+}
+
+.wwe-cover-lock svg {
+	width: 14px;
+	height: 14px;
+}
+
+/* --- Projektliste auf der Kundenseite --- */
+
+.wwe-cover-projects {
+	grid-column: 3;
+	grid-row: 2;
+	display: flex;
+	flex-direction: column;
+	gap: var(--size-2-3);
+	width: 260px;
+	overflow-y: auto;
+	padding: var(--size-4-3);
+	border-left: 1px solid var(--background-modifier-border);
+	background: var(--background-secondary);
+}
+
+.wwe-projects-heading {
+	font-size: var(--font-ui-smaller);
+	color: var(--text-muted);
+	margin-bottom: var(--size-2-1);
+}
+
+.wwe-cover-icon {
+	display: inline-flex;
+	color: var(--text-muted);
+	flex-shrink: 0;
+}
+
+.wwe-cover-icon svg {
+	width: 16px;
+	height: 16px;
+}
+
+.wwe-cover-kunde.is-link {
+	cursor: pointer;
+}
+
+.wwe-cover-kunde.is-link:hover {
+	background: color-mix(in srgb, var(--wwe-hue) 25%, transparent);
 }
 
 .wwe-cover-kunde {

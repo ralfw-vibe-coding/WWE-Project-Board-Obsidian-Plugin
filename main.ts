@@ -47,6 +47,7 @@ const COVER_CHROME_CLASS = "wwe-cover-chrome";
 const COVER_PANEL_OPEN_CLASS = "wwe-cover-panel-open";
 const COVER_HEADER_CLASS = "wwe-cover-header";
 const COVER_PANEL_CLASS = "wwe-cover-panel";
+const COVER_PROJECTS_CLASS = "wwe-cover-projects";
 const SHOW_CHROME_KEY = "wwe-project-board:show-file-chrome";
 const SHOW_PANEL_KEY = "wwe-project-board:show-cover-panel";
 
@@ -56,12 +57,14 @@ interface CoverField {
 	key: string;
 	label: string;
 	kind: CoverFieldKind;
+	/** Hinter Schloss: ändert man diese Werte, laufen sie den Ordnernamen davon. */
+	locked?: boolean;
 }
 
 /** "typ" fehlt bewusst: der ist strukturell und darf nicht aus Versehen kippen. */
 const COVER_FIELDS: CoverField[] = [
-	{ key: "projekt", label: "Projekt", kind: "text" },
-	{ key: "kunde", label: "Kunde", kind: "text" },
+	{ key: "projekt", label: "Projekt", kind: "text", locked: true },
+	{ key: "kunde", label: "Kunde", kind: "text", locked: true },
 	{ key: "fortschritt", label: "Fortschritt", kind: "select" },
 	{ key: "owner", label: "Owner", kind: "list" },
 	{ key: "ansprechpartner", label: "Ansprechpartner", kind: "text" },
@@ -182,6 +185,19 @@ function newProjectNote(projekt: string, kunde: string, status: string): string 
 	].join("\n");
 }
 
+function fmText(value: unknown): string {
+	if (value === null || value === undefined) return "";
+	return String(value).trim();
+}
+
+function fmList(value: unknown): string[] {
+	if (Array.isArray(value)) {
+		return value.map((item) => String(item).trim()).filter(Boolean);
+	}
+	const raw = fmText(value);
+	return raw ? raw.split(/\s*,\s*/).filter(Boolean) : [];
+}
+
 function stringArray(value: unknown): string[] {
 	if (!Array.isArray(value)) return [];
 	return value.filter((item): item is string => typeof item === "string");
@@ -194,6 +210,117 @@ function orderMap(value: unknown): Record<string, string[]> {
 		out[key] = stringArray(raw);
 	}
 	return out;
+}
+
+/** Alles, was eine Projektkarte zeigt — egal ob sie aus einer Base oder aus einer Datei kommt. */
+interface CardModel {
+	path: string;
+	projekt: string;
+	/** Auf dem Board der Kunde, auf der Kundenseite der Fortschritt. */
+	chip: string;
+	chipHue: string;
+	drift: string[];
+	owners: string[];
+	ansprechpartner: string;
+	format: string;
+	tags: string[];
+	wiedervorlage: string;
+	deadline: string;
+}
+
+function driftOf(
+	projekt: string,
+	projektFolder: string,
+	kunde: string,
+	kundeFolder: string
+): string[] {
+	const drift: string[] = [];
+	if (projektFolder && projekt !== projektFolder) {
+		drift.push(`Projektordner heißt "${projektFolder}"`);
+	}
+	if (kundeFolder && kunde !== kundeFolder) {
+		drift.push(`Kundenordner heißt "${kundeFolder}"`);
+	}
+	return drift;
+}
+
+function renderMetaRow(parentEl: HTMLElement, icon: string, value: string): void {
+	if (!value) return;
+	const rowEl = parentEl.createDiv({ cls: "wwe-meta-row" });
+	setIcon(rowEl.createSpan({ cls: "wwe-meta-icon" }), icon);
+	rowEl.createSpan({ text: value });
+}
+
+function renderBadge(
+	parentEl: HTMLElement,
+	cls: string,
+	icon: string,
+	label: string,
+	raw: string
+): void {
+	const badgeEl = parentEl.createSpan({ cls: `wwe-badge ${cls}` });
+	badgeEl.setAttribute("aria-label", `${label} ${formatDate(raw)}`);
+	setIcon(badgeEl.createSpan({ cls: "wwe-badge-icon" }), icon);
+	badgeEl.createSpan({ text: formatDate(raw) });
+}
+
+function renderProjectCard(
+	parentEl: HTMLElement,
+	card: CardModel,
+	onOpen: () => void
+): HTMLElement {
+	const cardEl = parentEl.createDiv({ cls: "wwe-card" });
+	cardEl.setAttribute("data-path", card.path);
+
+	const headEl = cardEl.createDiv({ cls: "wwe-card-head" });
+	if (card.chip) {
+		const chipEl = headEl.createSpan({ cls: "wwe-chip", text: card.chip });
+		chipEl.style.setProperty("--wwe-hue", card.chipHue);
+	}
+	if (card.drift.length > 0) {
+		const warnEl = headEl.createSpan({ cls: "wwe-warn" });
+		setIcon(warnEl, "alert-triangle");
+		warnEl.setAttribute("aria-label", card.drift.join(" · "));
+	}
+	if (card.owners.length > 0) {
+		const avatarsEl = headEl.createDiv({ cls: "wwe-avatars" });
+		for (const owner of card.owners) {
+			const avatarEl = avatarsEl.createSpan({ cls: "wwe-avatar", text: initials(owner) });
+			avatarEl.style.setProperty("--wwe-hue", hueFor(owner));
+			avatarEl.setAttribute("aria-label", owner);
+		}
+	}
+
+	const titleEl = cardEl.createDiv({ cls: "wwe-card-title", text: card.projekt });
+	titleEl.addEventListener("click", (evt) => {
+		evt.preventDefault();
+		evt.stopPropagation();
+		onOpen();
+	});
+
+	const metaEl = cardEl.createDiv({ cls: "wwe-meta" });
+	renderMetaRow(metaEl, "user", card.ansprechpartner);
+	renderMetaRow(metaEl, "presentation", card.format);
+	if (metaEl.childElementCount === 0) metaEl.remove();
+
+	if (card.tags.length > 0) {
+		const tagsEl = cardEl.createDiv({ cls: "wwe-tags" });
+		for (const tag of card.tags) {
+			tagsEl.createSpan({ cls: "wwe-tag", text: tag.replace(/^#/, "") });
+		}
+	}
+
+	if (card.wiedervorlage || card.deadline) {
+		const footEl = cardEl.createDiv({ cls: "wwe-card-foot" });
+		if (card.wiedervorlage) {
+			renderBadge(footEl, "wwe-badge-wv", "clock", "Wiedervorlage", card.wiedervorlage);
+		}
+		if (card.deadline) {
+			renderBadge(footEl, "wwe-badge-dl", "flag", "Deadline", card.deadline);
+		}
+	}
+
+	return cardEl;
 }
 
 class ProjectBoardView extends BasesView {
@@ -560,92 +687,26 @@ class ProjectBoardView extends BasesView {
 		const projekt = text(entry, P.PROJEKT) || projektFolder;
 		const kunde = text(entry, P.KUNDE) || kundeFolder;
 
-		const drift: string[] = [];
-		if (projektFolder && projekt !== projektFolder) {
-			drift.push(`Projektordner heißt "${projektFolder}"`);
-		}
-		if (kundeFolder && kunde !== kundeFolder) {
-			drift.push(`Kundenordner heißt "${kundeFolder}"`);
-		}
-
-		const cardEl = parentEl.createDiv({ cls: "wwe-card" });
-		cardEl.setAttribute("data-path", entry.file.path);
-
-		const headEl = cardEl.createDiv({ cls: "wwe-card-head" });
-		if (kunde) {
-			const kundeEl = headEl.createSpan({ cls: "wwe-kunde", text: kunde });
-			kundeEl.style.setProperty("--wwe-hue", hueFor(kunde));
-		}
-		if (drift.length > 0) {
-			const warnEl = headEl.createSpan({ cls: "wwe-warn" });
-			setIcon(warnEl, "alert-triangle");
-			warnEl.setAttribute("aria-label", drift.join(" · "));
-		}
-		const owners = list(entry, P.OWNER);
-		if (owners.length > 0) {
-			const avatarsEl = headEl.createDiv({ cls: "wwe-avatars" });
-			for (const owner of owners) {
-				const avatarEl = avatarsEl.createSpan({
-					cls: "wwe-avatar",
-					text: initials(owner),
-				});
-				avatarEl.style.setProperty("--wwe-hue", hueFor(owner));
-				avatarEl.setAttribute("aria-label", owner);
+		renderProjectCard(
+			parentEl,
+			{
+				path: entry.file.path,
+				projekt,
+				chip: kunde,
+				chipHue: hueFor(kunde),
+				drift: driftOf(projekt, projektFolder, kunde, kundeFolder),
+				owners: list(entry, P.OWNER),
+				ansprechpartner: text(entry, P.ANSPRECHPARTNER),
+				format: text(entry, P.FORMAT),
+				tags: list(entry, P.TAGS),
+				wiedervorlage: text(entry, P.WIEDERVORLAGE),
+				deadline: text(entry, P.DEADLINE),
+			},
+			() => {
+				this.select(entry.file.path);
+				void this.app.workspace.getLeaf(false).openFile(entry.file);
 			}
-		}
-
-		const titleEl = cardEl.createDiv({ cls: "wwe-card-title", text: projekt });
-		titleEl.addEventListener("click", (evt) => {
-			evt.preventDefault();
-			evt.stopPropagation();
-			this.select(entry.file.path);
-			void this.app.workspace.getLeaf(false).openFile(entry.file);
-		});
-
-		const metaEl = cardEl.createDiv({ cls: "wwe-meta" });
-		this.renderMetaRow(metaEl, "user", text(entry, P.ANSPRECHPARTNER));
-		this.renderMetaRow(metaEl, "presentation", text(entry, P.FORMAT));
-		if (metaEl.childElementCount === 0) metaEl.remove();
-
-		const tags = list(entry, P.TAGS);
-		if (tags.length > 0) {
-			const tagsEl = cardEl.createDiv({ cls: "wwe-tags" });
-			for (const tag of tags) {
-				tagsEl.createSpan({ cls: "wwe-tag", text: tag.replace(/^#/, "") });
-			}
-		}
-
-		const wiedervorlage = text(entry, P.WIEDERVORLAGE);
-		const deadline = text(entry, P.DEADLINE);
-		if (wiedervorlage || deadline) {
-			const footEl = cardEl.createDiv({ cls: "wwe-card-foot" });
-			if (wiedervorlage) {
-				this.renderBadge(footEl, "wwe-badge-wv", "clock", "Wiedervorlage", wiedervorlage);
-			}
-			if (deadline) {
-				this.renderBadge(footEl, "wwe-badge-dl", "flag", "Deadline", deadline);
-			}
-		}
-	}
-
-	private renderMetaRow(parentEl: HTMLElement, icon: string, value: string): void {
-		if (!value) return;
-		const rowEl = parentEl.createDiv({ cls: "wwe-meta-row" });
-		setIcon(rowEl.createSpan({ cls: "wwe-meta-icon" }), icon);
-		rowEl.createSpan({ text: value });
-	}
-
-	private renderBadge(
-		parentEl: HTMLElement,
-		cls: string,
-		icon: string,
-		label: string,
-		raw: string
-	): void {
-		const badgeEl = parentEl.createSpan({ cls: `wwe-badge ${cls}` });
-		badgeEl.setAttribute("aria-label", `${label} ${formatDate(raw)}`);
-		setIcon(badgeEl.createSpan({ cls: "wwe-badge-icon" }), icon);
-		badgeEl.createSpan({ text: formatDate(raw) });
+		);
 	}
 
 	// --- Auswahl ----------------------------------------------------------
@@ -1055,10 +1116,45 @@ export default class WweProjectBoardPlugin extends Plugin {
 			.filter((view): view is MarkdownView => view instanceof MarkdownView);
 	}
 
-	/** Ein Deckblatt ist ein _index.md mit typ "projekt" — nur die bekommen die Behandlung. */
-	private isCover(file: TFile): boolean {
-		if (file.basename !== "_index") return false;
-		return this.app.metadataCache.getFileCache(file)?.frontmatter?.typ === "projekt";
+	/** Deckblätter sind _index.md — als Projekt oder als Kunde. */
+	private coverKind(file: TFile): "projekt" | "kunde" | null {
+		if (file.basename !== "_index") return null;
+		const typ = this.app.metadataCache.getFileCache(file)?.frontmatter?.typ;
+		if (typ === "projekt") return "projekt";
+		if (typ === "kunde") return "kunde";
+		return null;
+	}
+
+	private frontmatterOf(file: TFile): Record<string, unknown> {
+		return this.app.metadataCache.getFileCache(file)?.frontmatter ?? {};
+	}
+
+	/** Die _index.md aller Projektordner unterhalb eines Kundenordners. */
+	private projectsOf(customerFolder: TFolder): TFile[] {
+		const files: TFile[] = [];
+		for (const child of customerFolder.children) {
+			if (!(child instanceof TFolder)) continue;
+			const index = child.children.find(
+				(candidate): candidate is TFile =>
+					candidate instanceof TFile && candidate.name === "_index.md"
+			);
+			if (index && this.coverKind(index) === "projekt") files.push(index);
+		}
+		return files.sort((a, b) => {
+			const rankA = DEFAULT_STATUS_ORDER.indexOf(
+				String(this.frontmatterOf(a).fortschritt ?? "")
+			);
+			const rankB = DEFAULT_STATUS_ORDER.indexOf(
+				String(this.frontmatterOf(b).fortschritt ?? "")
+			);
+			if (rankA !== rankB) return (rankA < 0 ? 99 : rankA) - (rankB < 0 ? 99 : rankB);
+			return a.path.localeCompare(b.path);
+		});
+	}
+
+	private openFile(file: TFile): void {
+		this.selectedPath = file.path;
+		void this.app.workspace.getLeaf(false).openFile(file);
 	}
 
 	private toggleChrome(): void {
@@ -1076,34 +1172,45 @@ export default class WweProjectBoardPlugin extends Plugin {
 	private decorateAll(rebuild = false): void {
 		for (const view of this.markdownViews()) {
 			const file = view.file;
-			if (file && this.isCover(file)) this.decorate(view, file, rebuild);
+			const kind = file ? this.coverKind(file) : null;
+			if (file && kind) this.decorate(view, file, kind, rebuild);
 			else this.undecorate(view);
 		}
 	}
 
-	private decorate(view: MarkdownView, file: TFile, rebuild: boolean): void {
+	private decorate(
+		view: MarkdownView,
+		file: TFile,
+		kind: "projekt" | "kunde",
+		rebuild: boolean
+	): void {
 		const { contentEl } = view;
 		contentEl.addClass(COVER_CLASS);
 		contentEl.toggleClass(COVER_CHROME_CLASS, this.showChrome);
-		contentEl.toggleClass(COVER_PANEL_OPEN_CLASS, this.showPanel);
+		contentEl.toggleClass(COVER_PANEL_OPEN_CLASS, this.showPanel && kind === "projekt");
 
 		const headerEl = contentEl.querySelector<HTMLElement>(`.${COVER_HEADER_CLASS}`);
-		const panelEl = contentEl.querySelector<HTMLElement>(`.${COVER_PANEL_CLASS}`);
 
 		// Nur neu aufbauen, wenn nötig. Sonst würde jede Frontmatter-Änderung —
 		// also auch die eigene — dem Nutzer das Eingabefeld unter den Fingern
 		// wegreißen, während er tippt.
-		const stale = !headerEl || !panelEl || headerEl.dataset.path !== file.path;
-		if (!stale && !rebuild) return;
+		if (headerEl?.dataset.path === file.path && !rebuild) return;
 
 		headerEl?.remove();
-		panelEl?.remove();
-		this.buildPanel(contentEl, file);
-		this.buildHeader(contentEl, file);
+		contentEl.querySelector(`.${COVER_PANEL_CLASS}`)?.remove();
+		contentEl.querySelector(`.${COVER_PROJECTS_CLASS}`)?.remove();
+
+		if (kind === "projekt") {
+			this.buildPanel(contentEl, file);
+			this.buildProjectHeader(contentEl, file);
+		} else {
+			this.buildProjectList(contentEl, file);
+			this.buildCustomerHeader(contentEl, file);
+		}
 	}
 
-	private buildHeader(contentEl: HTMLElement, file: TFile): void {
-		const frontmatter = this.app.metadataCache.getFileCache(file)?.frontmatter ?? {};
+	private buildProjectHeader(contentEl: HTMLElement, file: TFile): void {
+		const frontmatter = this.frontmatterOf(file);
 		const projekt =
 			typeof frontmatter.projekt === "string" && frontmatter.projekt
 				? frontmatter.projekt
@@ -1113,9 +1220,7 @@ export default class WweProjectBoardPlugin extends Plugin {
 				? frontmatter.kunde
 				: file.parent?.parent?.name ?? "";
 
-		const headerEl = createDiv({ cls: COVER_HEADER_CLASS });
-		headerEl.dataset.path = file.path;
-		contentEl.prepend(headerEl);
+		const headerEl = this.newHeader(contentEl, file);
 
 		const toggleEl = headerEl.createSpan({ cls: "wwe-cover-toggle" });
 		setIcon(toggleEl, this.showPanel ? "panel-left-close" : "panel-left-open");
@@ -1126,10 +1231,89 @@ export default class WweProjectBoardPlugin extends Plugin {
 		toggleEl.addEventListener("click", () => this.togglePanel());
 
 		if (kunde) {
-			const kundeEl = headerEl.createSpan({ cls: "wwe-cover-kunde", text: kunde });
+			const kundeEl = headerEl.createSpan({
+				cls: "wwe-cover-kunde is-link",
+				text: kunde,
+			});
 			kundeEl.style.setProperty("--wwe-hue", hueFor(kunde));
+			kundeEl.setAttribute("aria-label", `Zur Seite von ${kunde}`);
+			kundeEl.addEventListener("click", () => this.openCustomer(file, kunde));
 		}
 		headerEl.createSpan({ cls: "wwe-cover-title", text: projekt });
+	}
+
+	private buildCustomerHeader(contentEl: HTMLElement, file: TFile): void {
+		const headerEl = this.newHeader(contentEl, file);
+		const kunde = file.parent?.name ?? file.basename;
+
+		const iconEl = headerEl.createSpan({ cls: "wwe-cover-icon" });
+		setIcon(iconEl, "building-2");
+		headerEl.createSpan({ cls: "wwe-cover-title", text: kunde });
+	}
+
+	private newHeader(contentEl: HTMLElement, file: TFile): HTMLElement {
+		const headerEl = createDiv({ cls: COVER_HEADER_CLASS });
+		headerEl.dataset.path = file.path;
+		contentEl.prepend(headerEl);
+		return headerEl;
+	}
+
+	/**
+	 * Der Kundenordner ist der Elternordner des Projektordners. Den nehmen wir
+	 * statt einer Suche über den Namen — der Ordner ist die Wahrheit.
+	 */
+	private openCustomer(projectFile: TFile, kunde: string): void {
+		const customerFolder = projectFile.parent?.parent;
+		const index = customerFolder?.children.find(
+			(candidate): candidate is TFile =>
+				candidate instanceof TFile && candidate.name === "_index.md"
+		);
+		if (!index) {
+			new Notice(`Für "${kunde}" gibt es keine _index.md.`);
+			return;
+		}
+		this.openFile(index);
+	}
+
+	private buildProjectList(contentEl: HTMLElement, file: TFile): void {
+		const listEl = createDiv({ cls: COVER_PROJECTS_CLASS });
+		contentEl.prepend(listEl);
+
+		const customerFolder = file.parent;
+		if (!customerFolder) return;
+
+		const projects = this.projectsOf(customerFolder);
+		listEl.createDiv({
+			cls: "wwe-projects-heading",
+			text: projects.length === 1 ? "1 Projekt" : `${projects.length} Projekte`,
+		});
+
+		for (const projectFile of projects) {
+			const frontmatter = this.frontmatterOf(projectFile);
+			const projektFolder = projectFile.parent?.name ?? "";
+			const kundeFolder = projectFile.parent?.parent?.name ?? "";
+			const projekt = fmText(frontmatter.projekt) || projektFolder;
+			const kunde = fmText(frontmatter.kunde) || kundeFolder;
+			const status = fmText(frontmatter.fortschritt);
+
+			renderProjectCard(
+				listEl,
+				{
+					path: projectFile.path,
+					projekt,
+					chip: status,
+					chipHue: STATUS_HUE[status] ?? hueFor(status),
+					drift: driftOf(projekt, projektFolder, kunde, kundeFolder),
+					owners: fmList(frontmatter.owner),
+					ansprechpartner: fmText(frontmatter.ansprechpartner),
+					format: fmText(frontmatter.format),
+					tags: fmList(frontmatter.tags),
+					wiedervorlage: fmText(frontmatter.wiedervorlage),
+					deadline: fmText(frontmatter.deadline),
+				},
+				() => this.openFile(projectFile)
+			);
+		}
 	}
 
 	private buildPanel(contentEl: HTMLElement, file: TFile): void {
@@ -1137,7 +1321,7 @@ export default class WweProjectBoardPlugin extends Plugin {
 		contentEl.prepend(panelEl);
 		if (!this.showPanel) return;
 
-		const frontmatter = this.app.metadataCache.getFileCache(file)?.frontmatter ?? {};
+		const frontmatter = this.frontmatterOf(file);
 		for (const field of COVER_FIELDS) {
 			this.buildField(panelEl, file, field, frontmatter[field.key]);
 		}
@@ -1168,9 +1352,30 @@ export default class WweProjectBoardPlugin extends Plugin {
 			return;
 		}
 
-		const inputEl = fieldEl.createEl("input", {
+		const rowEl = field.locked
+			? fieldEl.createDiv({ cls: "wwe-cover-lockrow" })
+			: fieldEl;
+		const inputEl = rowEl.createEl("input", {
 			attr: { type: field.kind === "date" ? "date" : "text" },
 		});
+
+		if (field.locked) {
+			inputEl.readOnly = true;
+			const lockEl = rowEl.createSpan({ cls: "wwe-cover-lock" });
+			setIcon(lockEl, "lock");
+			lockEl.setAttribute("aria-label", "Zum Ändern aufschließen");
+			lockEl.addEventListener("click", () => {
+				inputEl.readOnly = !inputEl.readOnly;
+				lockEl.empty();
+				setIcon(lockEl, inputEl.readOnly ? "lock" : "unlock");
+				lockEl.toggleClass("is-open", !inputEl.readOnly);
+				lockEl.setAttribute(
+					"aria-label",
+					inputEl.readOnly ? "Zum Ändern aufschließen" : "Wieder abschließen"
+				);
+				if (!inputEl.readOnly) inputEl.focus();
+			});
+		}
 
 		if (field.kind === "list") {
 			inputEl.value = Array.isArray(raw) ? raw.map(String).join(", ") : String(raw ?? "");
@@ -1224,5 +1429,6 @@ export default class WweProjectBoardPlugin extends Plugin {
 		contentEl.removeClass(COVER_PANEL_OPEN_CLASS);
 		contentEl.querySelector(`.${COVER_HEADER_CLASS}`)?.remove();
 		contentEl.querySelector(`.${COVER_PANEL_CLASS}`)?.remove();
+		contentEl.querySelector(`.${COVER_PROJECTS_CLASS}`)?.remove();
 	}
 }
