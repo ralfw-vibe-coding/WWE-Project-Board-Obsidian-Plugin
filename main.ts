@@ -120,10 +120,24 @@ function hueFor(name: string): string {
 	return PALETTE[hash % PALETTE.length];
 }
 
+/**
+ * Obsidians Auswertung wirft bei unsauberem Frontmatter — etwa einer Liste mit
+ * leerem Eintrag oder einem Datumsfeld, in dem ein Name steht. Ohne Auffangen
+ * riss ein einziger solcher Eintrag den ganzen Render mit, sodass die Hälfte
+ * der Karten fehlte und das Board gar nicht mehr bedienbar war.
+ */
 function text(entry: BasesEntry, prop: BasesPropertyId): string {
-	const value = entry.getValue(prop);
-	if (!value || !value.isTruthy()) return "";
-	return value.toString().trim();
+	try {
+		const value = entry.getValue(prop);
+		if (!value || !value.isTruthy()) return "";
+		return value.toString().trim();
+	} catch (error) {
+		console.warn(
+			`WWE Project Board: "${prop}" in ${entry.file.path} ist nicht lesbar.`,
+			error
+		);
+		return "";
+	}
 }
 
 function list(entry: BasesEntry, prop: BasesPropertyId): string[] {
@@ -478,8 +492,7 @@ class ProjectBoardView extends BasesView {
 		const parts: string[] = [];
 		for (const prop of this.allProperties ?? []) {
 			if (!prop.startsWith("note.")) continue;
-			const value = entry.getValue(prop);
-			if (value && value.isTruthy()) parts.push(value.toString());
+			parts.push(text(entry, prop));
 		}
 		parts.push(entry.file.parent?.name ?? "");
 		parts.push(entry.file.parent?.parent?.name ?? "");
@@ -693,7 +706,16 @@ class ProjectBoardView extends BasesView {
 		const bodyEl = colEl.createDiv({ cls: "wwe-col-body" });
 		bodyEl.setAttribute("data-status", status);
 		for (const entry of entries) {
-			this.renderCard(bodyEl, entry);
+			// Zweiter Schutzwall: eine Karte, die sich partout nicht zeichnen lässt,
+			// darf die restlichen Karten und vor allem initSortables() nicht mitreißen.
+			try {
+				this.renderCard(bodyEl, entry);
+			} catch (error) {
+				console.warn(
+					`WWE Project Board: Karte für ${entry.file.path} konnte nicht gezeichnet werden.`,
+					error
+				);
+			}
 		}
 	}
 
