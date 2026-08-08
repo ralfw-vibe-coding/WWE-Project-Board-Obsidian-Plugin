@@ -438,6 +438,79 @@
 	--wwe-hue: #D8483A;
 }
 
+/* --- Deckblatt-Ansicht --- */
+
+/* Dateiname und Eigenschaften weg: bei einem _index.md sagt der Name nichts,
+   und die Eigenschaften stehen beim Schreiben nur im Weg. Über die Kopfzeile
+   oder den Befehl sind sie jederzeit wieder da.
+
+   !important ist hier nötig: Obsidian setzt die Eigenschaften über
+   .markdown-source-view.show-properties .metadata-container auf display:block,
+   was dieselbe Spezifität hat und als spätere Regel sonst gewinnt. */
+.wwe-cover:not(.wwe-cover-chrome) .inline-title,
+.wwe-cover:not(.wwe-cover-chrome) .metadata-container {
+	display: none !important;
+}
+
+.wwe-cover-header {
+	display: flex;
+	align-items: center;
+	gap: var(--size-4-2);
+	padding: var(--size-4-3) var(--size-4-6) var(--size-2-2);
+	flex-shrink: 0;
+}
+
+.wwe-cover-heading {
+	display: flex;
+	align-items: baseline;
+	gap: var(--size-2-3);
+	min-width: 0;
+}
+
+.wwe-cover-kunde {
+	font-size: var(--font-ui-small);
+	color: var(--text-muted);
+	white-space: nowrap;
+}
+
+.wwe-cover-kunde::after {
+	content: "·";
+	margin-left: var(--size-2-3);
+	color: var(--text-faint);
+}
+
+.wwe-cover-title {
+	font-size: var(--font-ui-large);
+	font-weight: 600;
+	color: var(--text-normal);
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.wwe-cover-toggle {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	width: 24px;
+	height: 24px;
+	margin-left: auto;
+	border-radius: var(--radius-s, 4px);
+	color: var(--text-faint);
+	cursor: pointer;
+	flex-shrink: 0;
+}
+
+.wwe-cover-toggle:hover {
+	color: var(--text-normal);
+	background: var(--background-modifier-hover);
+}
+
+.wwe-cover-toggle svg {
+	width: 16px;
+	height: 16px;
+}
+
 /* --- Dialog "Neues Projekt" --- */
 
 .wwe-modal {

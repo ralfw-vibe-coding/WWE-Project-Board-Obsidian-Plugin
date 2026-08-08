@@ -3,6 +3,7 @@ import {
 	BasesEntry,
 	BasesPropertyId,
 	BasesView,
+	MarkdownView,
 	Modal,
 	Notice,
 	Plugin,
@@ -39,6 +40,12 @@ const MAX_VISIBLE_CUSTOMERS = 6;
  * im localStorage der Vault und werden nie mitsynchronisiert.
  */
 const LOCAL_STATE_PREFIX = "wwe-project-board:";
+
+/** Deckblatt-Ansicht: Dateikopf ausblenden, eigene Kopfzeile einsetzen. */
+const COVER_CLASS = "wwe-cover";
+const COVER_CHROME_CLASS = "wwe-cover-chrome";
+const COVER_HEADER_CLASS = "wwe-cover-header";
+const SHOW_CHROME_KEY = "wwe-project-board:show-file-chrome";
 
 const ZOOM_MIN = 50;
 const ZOOM_MAX = 130;
@@ -973,6 +980,9 @@ export default class WweProjectBoardPlugin extends Plugin {
 	/** Zuletzt angeklickte Karte — überlebt das Wegnavigieren zur Projektdatei. */
 	selectedPath: string | null = null;
 
+	/** Ob Dateiname und Eigenschaften im Deckblatt sichtbar sind. Pro Gerät. */
+	private showChrome = false;
+
 	async onload(): Promise<void> {
 		this.registerBasesView(VIEW_TYPE, {
 			name: "Project Board",
@@ -980,7 +990,97 @@ export default class WweProjectBoardPlugin extends Plugin {
 			factory: (controller, containerEl) =>
 				new ProjectBoardView(controller, containerEl, this),
 		});
+
+		this.showChrome = this.app.loadLocalStorage(SHOW_CHROME_KEY) === true;
+
+		this.addCommand({
+			id: "toggle-cover-chrome",
+			name: "Deckblatt: Dateiname und Eigenschaften ein-/ausblenden",
+			callback: () => this.toggleChrome(),
+		});
+
+		this.registerEvent(this.app.workspace.on("file-open", () => this.decorateAll()));
+		this.registerEvent(this.app.workspace.on("layout-change", () => this.decorateAll()));
+		this.registerEvent(
+			this.app.metadataCache.on("changed", (file) => {
+				if (file.basename === "_index") this.decorateAll();
+			})
+		);
+		this.app.workspace.onLayoutReady(() => this.decorateAll());
 	}
 
-	onunload(): void {}
+	onunload(): void {
+		for (const view of this.markdownViews()) this.undecorate(view);
+	}
+
+	private markdownViews(): MarkdownView[] {
+		return this.app.workspace
+			.getLeavesOfType("markdown")
+			.map((leaf) => leaf.view)
+			.filter((view): view is MarkdownView => view instanceof MarkdownView);
+	}
+
+	/** Ein Deckblatt ist ein _index.md mit typ "projekt" — nur die bekommen die Behandlung. */
+	private isCover(file: TFile): boolean {
+		if (file.basename !== "_index") return false;
+		return this.app.metadataCache.getFileCache(file)?.frontmatter?.typ === "projekt";
+	}
+
+	private toggleChrome(): void {
+		this.showChrome = !this.showChrome;
+		this.app.saveLocalStorage(SHOW_CHROME_KEY, this.showChrome);
+		this.decorateAll();
+	}
+
+	private decorateAll(): void {
+		for (const view of this.markdownViews()) {
+			const file = view.file;
+			if (file && this.isCover(file)) this.decorate(view, file);
+			else this.undecorate(view);
+		}
+	}
+
+	private decorate(view: MarkdownView, file: TFile): void {
+		const { contentEl } = view;
+		contentEl.addClass(COVER_CLASS);
+		contentEl.toggleClass(COVER_CHROME_CLASS, this.showChrome);
+
+		// Obsidian baut den Inhalt beim Moduswechsel neu auf, deshalb wird die
+		// Kopfzeile bei jedem Durchlauf neu erzeugt statt nur einmal.
+		contentEl.querySelector(`.${COVER_HEADER_CLASS}`)?.remove();
+		const headerEl = createDiv({ cls: COVER_HEADER_CLASS });
+		contentEl.prepend(headerEl);
+
+		const frontmatter = this.app.metadataCache.getFileCache(file)?.frontmatter ?? {};
+		const projekt =
+			typeof frontmatter.projekt === "string" && frontmatter.projekt
+				? frontmatter.projekt
+				: file.parent?.name ?? file.basename;
+		const kunde =
+			typeof frontmatter.kunde === "string" && frontmatter.kunde
+				? frontmatter.kunde
+				: file.parent?.parent?.name ?? "";
+
+		const titleEl = headerEl.createDiv({ cls: "wwe-cover-heading" });
+		if (kunde) titleEl.createSpan({ cls: "wwe-cover-kunde", text: kunde });
+		titleEl.createSpan({ cls: "wwe-cover-title", text: projekt });
+
+		const toggleEl = headerEl.createSpan({ cls: "wwe-cover-toggle" });
+		setIcon(toggleEl, this.showChrome ? "chevron-up" : "sliders-horizontal");
+		toggleEl.setAttribute(
+			"aria-label",
+			this.showChrome
+				? "Dateiname und Eigenschaften ausblenden"
+				: "Dateiname und Eigenschaften anzeigen"
+		);
+		toggleEl.addEventListener("click", () => this.toggleChrome());
+	}
+
+	private undecorate(view: MarkdownView): void {
+		const { contentEl } = view;
+		if (!contentEl.hasClass(COVER_CLASS)) return;
+		contentEl.removeClass(COVER_CLASS);
+		contentEl.removeClass(COVER_CHROME_CLASS);
+		contentEl.querySelector(`.${COVER_HEADER_CLASS}`)?.remove();
+	}
 }
