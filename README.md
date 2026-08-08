@@ -34,6 +34,55 @@ sie ab, zeigt die Karte ein Warndreieck. Im Eigenschaften-Panel stehen beide Fel
 deshalb hinter einem Schloss. Der Kundenwurzelordner ist nirgends fest verdrahtet — er
 wird aus den Daten erschlossen.
 
+## Installation in anderen Vaults
+
+Das Plugin ist nicht im offiziellen Obsidian-Verzeichnis und soll da auch nicht hin.
+Für die Verteilung an eigene Geräte und an Kollegen gibt es zwei Wege.
+
+### Mit BRAT (empfohlen, aktualisiert sich selbst)
+
+[BRAT](https://github.com/TfTHacker/obsidian42-brat) ist ein Plugin aus dem offiziellen
+Verzeichnis, das andere Plugins direkt aus GitHub installiert und aktuell hält. Pro Gerät
+einmal einrichten:
+
+1. In Obsidian: Einstellungen → Externe Erweiterungen → Durchsuchen → „BRAT" installieren
+   und aktivieren. (Der eingeschränkte Modus muss dafür aus sein.)
+2. Befehlspalette → „BRAT: Add a beta plugin for testing" und diese Adresse eingeben:
+   `ralfw-vibe-coding/WWE-Project-Board-Obsidian-Plugin`
+3. BRAT lädt das neueste Release und aktiviert das Plugin.
+
+Neue Versionen holt BRAT beim Start von Obsidian oder über „BRAT: Check for updates".
+Weil das Repo öffentlich ist, braucht niemand ein GitHub-Konto oder einen Token.
+
+### Von Hand (ohne BRAT, ohne Aktualisierung)
+
+Aus dem gewünschten [Release](https://github.com/ralfw-vibe-coding/WWE-Project-Board-Obsidian-Plugin/releases)
+die drei Dateien `main.js`, `manifest.json` und `styles.css` herunterladen und in der
+Ziel-Vault ablegen unter:
+
+```
+<Vault>/.obsidian/plugins/wwe-project-board/
+```
+
+Danach Obsidian neu starten und das Plugin in den Einstellungen aktivieren.
+
+## Eine neue Version veröffentlichen
+
+`main.js` liegt bewusst nicht im Repo. Die Releases baut deshalb GitHub Actions
+(`.github/workflows/release.yml`) und hängt die drei Dateien an.
+
+1. `version` in der `manifest.json` hochsetzen, committen und pushen.
+2. Tag mit genau derselben Version setzen und pushen:
+
+   ```bash
+   git tag 0.2.0
+   git push origin 0.2.0
+   ```
+
+Der Workflow prüft, ob Tag und `manifest.json` übereinstimmen, und bricht sonst ab —
+denn BRAT sucht anhand der Version aus der `manifest.json` nach dem passenden Release.
+Laufen beide auseinander, findet BRAT nichts und meldet keinen brauchbaren Fehler.
+
 ## Entwicklung
 
 ```bash
