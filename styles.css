@@ -279,6 +279,18 @@
 	opacity: 0.35;
 }
 
+/* Die schwebende Kopie hängt am body, also außerhalb des Board-Zooms und ohne
+   dessen Kartenstile. Deshalb hier eigenständig aussehen lassen. */
+.wwe-drag-floating {
+	background: var(--background-primary);
+	border: 1px solid var(--interactive-accent);
+	border-radius: var(--radius-l, 12px);
+	box-shadow: 0 8px 24px rgba(0, 0, 0, 0.18);
+	opacity: 0.95;
+	cursor: grabbing;
+	pointer-events: none;
+}
+
 .wwe-card-head {
 	display: flex;
 	align-items: center;

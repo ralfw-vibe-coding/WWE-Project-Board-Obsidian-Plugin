@@ -830,16 +830,36 @@ class ProjectBoardView extends BasesView {
 		this.sortables = [];
 	}
 
+	/**
+	 * Das Board hängt an einem CSS-`zoom`. Sortable rechnet beim Positionieren
+	 * der schwebenden Kopie nicht damit: bei 80 % lief sie dem Cursor sichtbar
+	 * davon, sodass man nicht zielen konnte. Ablegen und Einsortieren stimmten
+	 * zwar weiterhin, weil das über die Cursorposition läuft — brauchbar war es
+	 * trotzdem nicht.
+	 *
+	 * forceFallback lässt Sortable eine eigene Kopie zeichnen, fallbackOnBody
+	 * hängt sie an den body und damit aus dem gezoomten Bereich heraus. Dort
+	 * gelten wieder unverfälschte Bildschirmkoordinaten.
+	 */
+	private get dragOptions(): Sortable.Options {
+		return {
+			animation: 150,
+			ghostClass: "wwe-drag-ghost",
+			forceFallback: true,
+			fallbackOnBody: true,
+			fallbackClass: "wwe-drag-floating",
+		};
+	}
+
 	private initSortables(): void {
 		this.sortables.push(
 			Sortable.create(this.boardEl, {
+				...this.dragOptions,
 				group: "wwe-columns",
 				draggable: ".wwe-col",
 				handle: ".wwe-col-header",
 				filter: ".wwe-col-add, .wwe-col-toggle",
 				preventOnFilter: false,
-				animation: 150,
-				ghostClass: "wwe-drag-ghost",
 				onStart: () => {
 					this.dragging = true;
 				},
@@ -853,10 +873,9 @@ class ProjectBoardView extends BasesView {
 		this.boardEl.querySelectorAll<HTMLElement>(".wwe-col-body").forEach((bodyEl) => {
 			this.sortables.push(
 				Sortable.create(bodyEl, {
+					...this.dragOptions,
 					group: "wwe-cards",
 					draggable: ".wwe-card",
-					animation: 150,
-					ghostClass: "wwe-drag-ghost",
 					onStart: () => {
 						this.dragging = true;
 					},
