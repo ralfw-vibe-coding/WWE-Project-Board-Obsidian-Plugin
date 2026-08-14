@@ -448,6 +448,7 @@ class ProjectBoardView extends BasesView {
 		this.filterInput.addEventListener("input", () => {
 			this.filterQuery = this.filterInput.value;
 			this.searchEl.toggleClass("has-query", this.filterQuery.length > 0);
+			this.saveLocalState();
 			this.scheduleRender();
 		});
 		this.filterInput.addEventListener("keydown", (evt) => {
@@ -480,6 +481,7 @@ class ProjectBoardView extends BasesView {
 		this.filterQuery = "";
 		this.filterInput.value = "";
 		this.searchEl.removeClass("has-query");
+		this.saveLocalState();
 		this.render();
 		this.filterInput.focus();
 	}
@@ -554,10 +556,15 @@ class ProjectBoardView extends BasesView {
 		const raw = this.app.loadLocalStorage(LOCAL_STATE_PREFIX + id);
 		if (!raw || typeof raw !== "object") return;
 
-		const state = raw as { collapsed?: unknown; zoom?: unknown };
+		const state = raw as { collapsed?: unknown; zoom?: unknown; filter?: unknown };
 		this.collapsed = new Set(stringArray(state.collapsed));
 		if (typeof state.zoom === "number") {
 			this.zoom = Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, state.zoom));
+		}
+		if (typeof state.filter === "string") {
+			this.filterQuery = state.filter;
+			this.filterInput.value = state.filter;
+			this.searchEl.toggleClass("has-query", state.filter.length > 0);
 		}
 		this.applyZoom();
 	}
@@ -566,6 +573,7 @@ class ProjectBoardView extends BasesView {
 		this.app.saveLocalStorage(LOCAL_STATE_PREFIX + this.ensureBoardId(), {
 			collapsed: Array.from(this.collapsed),
 			zoom: this.zoom,
+			filter: this.filterQuery,
 		});
 	}
 

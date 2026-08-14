@@ -1,7 +1,7 @@
 {
 	"id": "wwe-project-board",
 	"name": "WWE Project Board",
-	"version": "1.0.2",
+	"version": "1.0.3",
 	"minAppVersion": "1.10.2",
 	"description": "Zeigt Base-Views als Projekt-Board mit Karten an.",
 	"author": "WWE",
