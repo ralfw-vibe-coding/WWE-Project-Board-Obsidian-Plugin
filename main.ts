@@ -76,6 +76,12 @@ const COVER_FIELDS: CoverField[] = [
 	{ key: "tags", label: "Tags", kind: "list" },
 ];
 
+/** Wie lange der Finger auf einer Karte ruhen muss, ehe ein Drag beginnt. */
+const DRAG_TOUCH_DELAY = 250;
+
+/** Bewegt er sich vorher weiter als das, war es ein Wischen. */
+const DRAG_TOUCH_THRESHOLD = 5;
+
 const ZOOM_MIN = 50;
 const ZOOM_MAX = 130;
 const ZOOM_STEP = 10;
@@ -878,6 +884,15 @@ class ProjectBoardView extends BasesView {
 			forceFallback: true,
 			fallbackOnBody: true,
 			fallbackClass: "wwe-drag-floating",
+
+			// Am Finger löste jede Berührung einer Karte sofort einen Drag aus, sodass
+			// man nur über den Zwischenräumen scrollen konnte. Jetzt muss der Finger
+			// erst kurz liegen bleiben: Wandert er vorher weiter als die Schwelle, gilt
+			// es als Wischen und der Drag wird abgeblasen. delayOnTouchOnly hält die
+			// Maus davon frei — dort startet der Drag weiterhin ohne Verzögerung.
+			delay: DRAG_TOUCH_DELAY,
+			delayOnTouchOnly: true,
+			touchStartThreshold: DRAG_TOUCH_THRESHOLD,
 		};
 	}
 
