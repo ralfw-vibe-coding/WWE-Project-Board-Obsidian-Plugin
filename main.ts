@@ -76,11 +76,19 @@ const COVER_FIELDS: CoverField[] = [
 	{ key: "tags", label: "Tags", kind: "list" },
 ];
 
-/** Wie lange der Finger auf einer Karte ruhen muss, ehe ein Drag beginnt. */
-const DRAG_TOUCH_DELAY = 250;
+/**
+ * Wie lange der Finger auf einer Karte ruhen muss, ehe ein Drag beginnt.
+ *
+ * Die Zeit ist der verlässlichere Maßstab als die Wegstrecke: Wer scrollen will,
+ * bewegt sich fast sofort los, meist binnen 100 ms. Die Schwelle unten zählt
+ * dagegen CSS-Pixel, und was ein CSS-Pixel physisch bedeutet, hängt am
+ * Anzeigemodus des Geräts — bei iOS' Display-Zoom deckt einer mehr Fläche ab,
+ * sodass dieselbe Fingerbewegung weniger Pixel erzeugt.
+ */
+const DRAG_TOUCH_DELAY = 400;
 
 /** Bewegt er sich vorher weiter als das, war es ein Wischen. */
-const DRAG_TOUCH_THRESHOLD = 5;
+const DRAG_TOUCH_THRESHOLD = 3;
 
 const ZOOM_MIN = 50;
 const ZOOM_MAX = 130;
