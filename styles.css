@@ -669,6 +669,23 @@
 	overflow: visible;
 }
 
+.wwe-modal.wwe-rename-modal {
+	width: 560px;
+}
+
+.wwe-rename-list {
+	max-height: 40vh;
+	overflow-y: auto;
+	margin: 0 0 var(--size-4-3);
+	padding-left: var(--size-4-5);
+	font-size: var(--font-ui-small);
+}
+
+.wwe-rename-blocked {
+	color: var(--text-error);
+	font-size: var(--font-ui-small);
+}
+
 .wwe-modal-hint {
 	font-size: var(--font-ui-small);
 	color: var(--text-muted);

@@ -10,6 +10,7 @@ import {
 	QueryController,
 	TFile,
 	TFolder,
+	WorkspaceLeaf,
 	debounce,
 	setIcon,
 } from "obsidian";
@@ -50,6 +51,16 @@ const COVER_PANEL_CLASS = "wwe-cover-panel";
 const COVER_PROJECTS_CLASS = "wwe-cover-projects";
 const SHOW_CHROME_KEY = "wwe-project-board:show-file-chrome";
 const SHOW_PANEL_KEY = "wwe-project-board:show-cover-panel";
+
+type CoverKind = "projekt" | "kunde";
+
+/**
+ * Früher hießen alle Deckblätter so. Das machte sie von woanders kaum
+ * verlinkbar, heute heißen sie wie ihr Ordner. Erkannt wird der alte Name
+ * weiterhin, bis eine Vault mit dem Umbenennen-Befehl umgestellt ist.
+ */
+const LEGACY_COVER_NAME = "_index";
+const RENAME_COMMAND_NAME = "Deckblätter nach ihrem Ordner benennen";
 
 type CoverFieldKind = "text" | "date" | "list" | "select";
 
@@ -240,6 +251,40 @@ function orderMap(value: unknown): Record<string, string[]> {
 	return out;
 }
 
+/** Ein Pfad nach dem Umbenennen von oldPath — als Datei selbst oder als einer ihrer Ordner. */
+function movedPath(path: string, oldPath: string, newPath: string): string {
+	if (path === oldPath) return newPath;
+	if (path.startsWith(`${oldPath}/`)) return newPath + path.slice(oldPath.length);
+	return path;
+}
+
+function escapeRegExp(value: string): string {
+	return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+/** Die Filterzeile, mit der Bases früher Deckblätter herausgesucht haben. */
+const LEGACY_FILTER_LINE = /^[ \t]*-[ \t]*file\.name[ \t]*==[ \t]*["']_index["'][ \t]*\r?\n/gm;
+
+/**
+ * Zieht eine .base-Datei auf die neuen Dateinamen nach: gespeicherte Pfade
+ * (Karten- und Spaltenreihenfolgen) werden ersetzt, die Filterzeile auf
+ * `_index` entfällt — der Filter auf `typ` erledigt dieselbe Arbeit.
+ *
+ * Ersetzt wird nur der ganze Pfad, nicht ein Pfad, der bloß darauf endet:
+ * "Kunden/A/_index.md" darf nicht in "Archiv/Kunden/A/_index.md" greifen.
+ */
+function rewriteBase(data: string, moves: Array<[string, string]>): string {
+	let out = data.replace(LEGACY_FILTER_LINE, "");
+	for (const [from, to] of moves) {
+		const pattern = new RegExp(
+			`(^|[\\s"'\\[,])${escapeRegExp(from)}(?=$|[\\s"'\\],:])`,
+			"gm"
+		);
+		out = out.replace(pattern, (_match, lead: string) => lead + to);
+	}
+	return out;
+}
+
 /** Alles, was eine Projektkarte zeigt — egal ob sie aus einer Base oder aus einer Datei kommt. */
 interface CardModel {
 	path: string;
@@ -257,6 +302,7 @@ interface CardModel {
 }
 
 function driftOf(
+	file: TFile,
 	projekt: string,
 	projektFolder: string,
 	kunde: string,
@@ -268,6 +314,11 @@ function driftOf(
 	}
 	if (kundeFolder && kunde !== kundeFolder) {
 		drift.push(`Kundenordner heißt "${kundeFolder}"`);
+	}
+	if (file.basename === LEGACY_COVER_NAME) {
+		drift.push(`Datei heißt noch _index.md — Befehl "${RENAME_COMMAND_NAME}"`);
+	} else if (projektFolder && file.basename !== projektFolder) {
+		drift.push(`Datei heißt "${file.basename}"`);
 	}
 	return drift;
 }
@@ -293,16 +344,42 @@ function renderBadge(
 }
 
 /**
+ * Deckblatt ist, was im Frontmatter `typ: projekt` oder `typ: kunde` trägt —
+ * der Dateiname spielt keine Rolle. So laufen alte `_index.md` und neue, nach
+ * dem Ordner benannte Dateien nebeneinander, solange eine Vault noch nicht
+ * umgestellt ist. Und ein umbenannter Ordner, dessen Datei noch den alten
+ * Namen trägt, verliert dadurch weder Deckblatt noch Board-Karte.
+ */
+function coverKindOf(app: App, file: TFile): CoverKind | null {
+	if (file.extension !== "md") return null;
+	const typ = app.metadataCache.getFileCache(file)?.frontmatter?.typ;
+	return typ === "projekt" || typ === "kunde" ? typ : null;
+}
+
+/** Das Deckblatt eines Ordners. Gibt es mehrere, gewinnt das nach dem Ordner benannte. */
+function coverIn(
+	app: App,
+	folder: TFolder | null | undefined,
+	kind: CoverKind
+): TFile | null {
+	if (!folder) return null;
+	const rank = (file: TFile) =>
+		file.basename === folder.name ? 0 : file.basename === LEGACY_COVER_NAME ? 1 : 2;
+	const candidates = folder.children
+		.filter(
+			(child): child is TFile => child instanceof TFile && coverKindOf(app, child) === kind
+		)
+		.sort((a, b) => rank(a) - rank(b) || a.name.localeCompare(b.name));
+	return candidates[0] ?? null;
+}
+
+/**
  * Der Kundenordner ist der Elternordner des Projektordners. Den nehmen wir
  * statt einer Suche über den Namen — der Ordner ist die Wahrheit, der Name im
  * Frontmatter kann davon abgewichen sein.
  */
-function customerIndexOf(file: TFile): TFile | null {
-	const index = file.parent?.parent?.children.find(
-		(candidate): candidate is TFile =>
-			candidate instanceof TFile && candidate.name === "_index.md"
-	);
-	return index ?? null;
+function customerCoverOf(app: App, projectFile: TFile): TFile | null {
+	return coverIn(app, projectFile.parent?.parent, "kunde");
 }
 
 function renderProjectCard(
@@ -437,8 +514,31 @@ class ProjectBoardView extends BasesView {
 		this.scheduleRender = debounce(() => this.render(), RENDER_DELAY);
 	}
 
+	onload(): void {
+		this.registerEvent(
+			this.app.vault.on("rename", (file, oldPath) => this.followRename(file.path, oldPath))
+		);
+	}
+
 	onDataUpdated(): void {
 		this.scheduleRender();
+	}
+
+	/**
+	 * Die Kartenreihenfolge merkt sich Pfade. Ohne Nachziehen rutschte eine Karte
+	 * nach jedem Umbenennen ihrer Datei oder eines ihrer Ordner ans Spaltenende,
+	 * und der alte Pfad blieb als Leiche in der .base-Datei stehen.
+	 */
+	private followRename(newPath: string, oldPath: string): void {
+		this.loadPrefs();
+		let changed = false;
+		for (const [status, paths] of Object.entries(this.cardOrderPref)) {
+			const moved = paths.map((path) => movedPath(path, oldPath, newPath));
+			if (moved.every((path, index) => path === paths[index])) continue;
+			this.cardOrderPref[status] = moved;
+			changed = true;
+		}
+		if (changed) this.persist("cardOrder", this.cardOrderPref);
 	}
 
 	onunload(): void {
@@ -761,7 +861,7 @@ class ProjectBoardView extends BasesView {
 				projekt,
 				chip: kunde,
 				chipHue: hueFor(kunde),
-				drift: driftOf(projekt, projektFolder, kunde, kundeFolder),
+				drift: driftOf(entry.file, projekt, projektFolder, kunde, kundeFolder),
 				owners: list(entry, P.OWNER),
 				ansprechpartner: text(entry, P.ANSPRECHPARTNER),
 				format: text(entry, P.FORMAT),
@@ -779,13 +879,13 @@ class ProjectBoardView extends BasesView {
 
 	/** Die Karte bleibt markiert, damit man beim Zurückkehren sieht, wo man war. */
 	private openCustomer(projectFile: TFile, kunde: string): void {
-		const index = customerIndexOf(projectFile);
-		if (!index) {
-			new Notice(`Für "${kunde}" gibt es keine _index.md.`);
+		const cover = customerCoverOf(this.app, projectFile);
+		if (!cover) {
+			new Notice(`Für "${kunde}" gibt es keine Kundenseite.`);
 			return;
 		}
 		this.select(projectFile.path);
-		void this.app.workspace.getLeaf(false).openFile(index);
+		void this.app.workspace.getLeaf(false).openFile(cover);
 	}
 
 	// --- Auswahl ----------------------------------------------------------
@@ -856,7 +956,7 @@ class ProjectBoardView extends BasesView {
 		try {
 			await this.app.vault.createFolder(projectPath);
 			const file = await this.app.vault.create(
-				`${projectPath}/_index.md`,
+				`${projectPath}/${name}.md`,
 				newProjectNote(name, folder.name, status)
 			);
 			this.plugin.selectedPath = file.path;
@@ -1155,13 +1255,126 @@ class NewProjectModal extends Modal {
 			this.nameInput.focus();
 			return;
 		}
-		if (/[\\/:]/.test(name)) {
-			new Notice("Der Projektname darf kein / \\ oder : enthalten.");
+		// Der Name wird zum Dateinamen und damit zum Linkziel: # ^ [ ] | brechen
+		// Wikilinks, / \ : gehen als Dateiname gar nicht.
+		if (/[\\/:#^[\]|]/.test(name)) {
+			new Notice("Der Projektname darf keines dieser Zeichen enthalten: / \\ : # ^ [ ] |");
 			return;
 		}
 
 		this.close();
 		this.onSubmit(folder, name);
+	}
+
+	onClose(): void {
+		this.contentEl.empty();
+	}
+}
+
+interface CoverRename {
+	file: TFile;
+	target: string;
+}
+
+interface RenamePlan {
+	renames: CoverRename[];
+	/** Pfade, bei denen es die Zieldatei schon gibt. */
+	conflicts: string[];
+	/** Links auf eines der umzubenennenden Deckblätter. */
+	links: number;
+	/** Obsidians „Interne Links automatisch aktualisieren". */
+	updatesLinks: boolean;
+	/** .base-Dateien, in denen noch _index vorkommt. */
+	bases: TFile[];
+	openBases: WorkspaceLeaf[];
+}
+
+/** Zeigt, was umbenannt würde, und lässt erst dann loslaufen. */
+class RenameCoversModal extends Modal {
+	private plan: RenamePlan;
+	private onConfirm: () => void;
+
+	constructor(app: App, plan: RenamePlan, onConfirm: () => void) {
+		super(app);
+		this.plan = plan;
+		this.onConfirm = onConfirm;
+	}
+
+	onOpen(): void {
+		this.modalEl.addClass("wwe-modal", "wwe-rename-modal");
+		this.titleEl.setText(RENAME_COMMAND_NAME);
+		const { contentEl } = this;
+		const { renames, conflicts, links, updatesLinks, bases, openBases } = this.plan;
+
+		if (renames.length === 0 && conflicts.length === 0) {
+			contentEl.createEl("p", {
+				cls: "wwe-modal-hint",
+				text: "Hier gibt es keine _index.md mehr — die Vault ist schon umgestellt.",
+			});
+			this.addActions("Schließen");
+			return;
+		}
+
+		contentEl.createEl("p", {
+			text: `${renames.length} Deckblätter bekommen den Namen ihres Ordners:`,
+		});
+		const listEl = contentEl.createEl("ul", { cls: "wwe-rename-list" });
+		for (const { file, target } of renames) {
+			listEl.createEl("li", {
+				text: `${file.path} → ${target.split("/").pop()}`,
+			});
+		}
+
+		if (conflicts.length > 0) {
+			contentEl.createEl("p", {
+				text: "Übersprungen, weil es die Zieldatei schon gibt:",
+			});
+			const conflictEl = contentEl.createEl("ul", { cls: "wwe-rename-list" });
+			for (const path of conflicts) conflictEl.createEl("li", { text: path });
+		}
+
+		const notes: string[] = [];
+		if (links > 0) notes.push(`${links} Links auf diese Dateien werden mit umgestellt.`);
+		if (bases.length > 0) {
+			notes.push(
+				`Angepasst werden außerdem: ${bases.map((base) => base.name).join(", ")} ` +
+					`(gespeicherte Kartenreihenfolge, Filter auf "_index").`
+			);
+		}
+		if (openBases.length > 0) {
+			notes.push(`${openBases.length} offene Base-Tabs werden dafür geschlossen.`);
+		}
+		notes.push("Nur auf einem Gerät ausführen — die anderen bekommen es per Sync.");
+		for (const note of notes) contentEl.createEl("p", { cls: "wwe-modal-hint", text: note });
+
+		// Ohne die Einstellung würden die Links ins Leere zeigen. Lieber anhalten,
+		// als still Links zu zerbrechen.
+		const blocked = links > 0 && !updatesLinks;
+		if (blocked) {
+			contentEl.createEl("p", {
+				cls: "wwe-rename-blocked",
+				text:
+					"„Interne Links automatisch aktualisieren\" ist aus. Bitte unter " +
+					"Einstellungen → Dateien und Links einschalten und den Befehl erneut aufrufen.",
+			});
+		}
+
+		const confirmEl = this.addActions("Abbrechen");
+		if (renames.length === 0 || blocked) return;
+		confirmEl
+			.createEl("button", { cls: "mod-cta", text: "Umbenennen" })
+			.addEventListener("click", () => {
+				this.close();
+				this.onConfirm();
+			});
+	}
+
+	private addActions(cancelText: string): HTMLElement {
+		const actionsEl = this.contentEl.createDiv({ cls: "wwe-actions" });
+		actionsEl
+			.createEl("button", { text: cancelText })
+			.addEventListener("click", () => this.close());
+		return actionsEl;
 	}
 
 	onClose(): void {
@@ -1202,11 +1415,27 @@ export default class WweProjectBoardPlugin extends Plugin {
 			callback: () => this.toggleChrome(),
 		});
 
+		this.addCommand({
+			id: "rename-covers-to-folder",
+			name: RENAME_COMMAND_NAME,
+			callback: () => void this.openRenameCovers(),
+		});
+
 		this.registerEvent(this.app.workspace.on("file-open", () => this.decorateAll()));
 		this.registerEvent(this.app.workspace.on("layout-change", () => this.decorateAll()));
 		this.registerEvent(
 			this.app.metadataCache.on("changed", (file) => {
-				if (file.basename === "_index") this.decorateAll();
+				// Auch eine offene Datei, die gerade ihr `typ` verloren hat — die
+				// muss ihr Deckblatt wieder abgeben.
+				const open = this.markdownViews().some((view) => view.file === file);
+				if (open || coverKindOf(this.app, file)) this.decorateAll();
+			})
+		);
+		this.registerEvent(
+			this.app.vault.on("rename", (file, oldPath) => {
+				if (this.selectedPath) {
+					this.selectedPath = movedPath(this.selectedPath, oldPath, file.path);
+				}
 			})
 		);
 		this.app.workspace.onLayoutReady(() => this.decorateAll());
@@ -1223,29 +1452,17 @@ export default class WweProjectBoardPlugin extends Plugin {
 			.filter((view): view is MarkdownView => view instanceof MarkdownView);
 	}
 
-	/** Deckblätter sind _index.md — als Projekt oder als Kunde. */
-	private coverKind(file: TFile): "projekt" | "kunde" | null {
-		if (file.basename !== "_index") return null;
-		const typ = this.app.metadataCache.getFileCache(file)?.frontmatter?.typ;
-		if (typ === "projekt") return "projekt";
-		if (typ === "kunde") return "kunde";
-		return null;
-	}
-
 	private frontmatterOf(file: TFile): Record<string, unknown> {
 		return this.app.metadataCache.getFileCache(file)?.frontmatter ?? {};
 	}
 
-	/** Die _index.md aller Projektordner unterhalb eines Kundenordners. */
+	/** Die Deckblätter aller Projektordner unterhalb eines Kundenordners. */
 	private projectsOf(customerFolder: TFolder): TFile[] {
 		const files: TFile[] = [];
 		for (const child of customerFolder.children) {
 			if (!(child instanceof TFolder)) continue;
-			const index = child.children.find(
-				(candidate): candidate is TFile =>
-					candidate instanceof TFile && candidate.name === "_index.md"
-			);
-			if (index && this.coverKind(index) === "projekt") files.push(index);
+			const cover = coverIn(this.app, child, "projekt");
+			if (cover) files.push(cover);
 		}
 		return files.sort((a, b) => {
 			const rankA = DEFAULT_STATUS_ORDER.indexOf(
@@ -1279,7 +1496,7 @@ export default class WweProjectBoardPlugin extends Plugin {
 	private decorateAll(rebuild = false): void {
 		for (const view of this.markdownViews()) {
 			const file = view.file;
-			const kind = file ? this.coverKind(file) : null;
+			const kind = file ? coverKindOf(this.app, file) : null;
 			if (file && kind) this.decorate(view, file, kind, rebuild);
 			else this.undecorate(view);
 		}
@@ -1366,12 +1583,12 @@ export default class WweProjectBoardPlugin extends Plugin {
 	}
 
 	private openCustomer(projectFile: TFile, kunde: string): void {
-		const index = customerIndexOf(projectFile);
-		if (!index) {
-			new Notice(`Für "${kunde}" gibt es keine _index.md.`);
+		const cover = customerCoverOf(this.app, projectFile);
+		if (!cover) {
+			new Notice(`Für "${kunde}" gibt es keine Kundenseite.`);
 			return;
 		}
-		this.openFile(index);
+		this.openFile(cover);
 	}
 
 	private buildProjectList(contentEl: HTMLElement, file: TFile): void {
@@ -1402,7 +1619,7 @@ export default class WweProjectBoardPlugin extends Plugin {
 					projekt,
 					chip: status,
 					chipHue: STATUS_HUE[status] ?? hueFor(status),
-					drift: driftOf(projekt, projektFolder, kunde, kundeFolder),
+					drift: driftOf(projectFile, projekt, projektFolder, kunde, kundeFolder),
 					owners: fmList(frontmatter.owner),
 					ansprechpartner: fmText(frontmatter.ansprechpartner),
 					format: fmText(frontmatter.format),
@@ -1518,6 +1735,93 @@ export default class WweProjectBoardPlugin extends Plugin {
 			new Notice(`Eigenschaft konnte nicht gespeichert werden: ${error}`);
 			console.error("WWE Project Board:", error);
 		}
+	}
+
+	// --- Umstellung von _index.md auf Ordnernamen --------------------------
+
+	/** Was der Umbenennen-Befehl tun würde — erst gezeigt, dann ausgeführt. */
+	private async planCoverRenames(): Promise<RenamePlan> {
+		const renames: CoverRename[] = [];
+		const conflicts: string[] = [];
+
+		for (const file of this.app.vault.getMarkdownFiles()) {
+			if (file.basename !== LEGACY_COVER_NAME || !coverKindOf(this.app, file)) continue;
+			const folder = file.parent;
+			if (!folder || folder.isRoot()) continue;
+			const target = `${folder.path}/${folder.name}.md`;
+			if (this.app.vault.getAbstractFileByPath(target)) conflicts.push(file.path);
+			else renames.push({ file, target });
+		}
+
+		renames.sort((a, b) => a.file.path.localeCompare(b.file.path));
+		const renamed = new Set(renames.map((rename) => rename.file.path));
+		let links = 0;
+		for (const [source, targets] of Object.entries(this.app.metadataCache.resolvedLinks)) {
+			for (const target of Object.keys(targets)) {
+				if (target !== source && renamed.has(target)) links++;
+			}
+		}
+
+		const bases: TFile[] = [];
+		for (const file of this.app.vault.getFiles()) {
+			if (file.extension !== "base") continue;
+			if ((await this.app.vault.cachedRead(file)).includes(LEGACY_COVER_NAME)) bases.push(file);
+		}
+
+		const openBases: WorkspaceLeaf[] = [];
+		this.app.workspace.iterateAllLeaves((leaf) => {
+			const file = (leaf.view as { file?: unknown }).file;
+			if (file instanceof TFile && file.extension === "base") openBases.push(leaf);
+		});
+
+		// Nicht Teil der öffentlichen API, aber seit Jahren stabil und der einzige
+		// Weg, die Einstellung zu lesen.
+		const vault = this.app.vault as unknown as { getConfig(key: string): unknown };
+		const updatesLinks = vault.getConfig("alwaysUpdateLinks") === true;
+
+		return { renames, conflicts, links, updatesLinks, bases, openBases };
+	}
+
+	private async openRenameCovers(): Promise<void> {
+		const plan = await this.planCoverRenames();
+		new RenameCoversModal(this.app, plan, () => void this.runCoverRenames(plan)).open();
+	}
+
+	private async runCoverRenames(plan: RenamePlan): Promise<void> {
+		// Eine offene Base hält ihre Konfiguration im Speicher und schriebe sie
+		// beim nächsten Speichern über unsere Änderungen an der Datei zurück.
+		for (const leaf of plan.openBases) leaf.detach();
+
+		const moves: Array<[string, string]> = [];
+		const failed: string[] = [];
+		for (const { file, target } of plan.renames) {
+			const from = file.path;
+			try {
+				await this.app.fileManager.renameFile(file, target);
+				moves.push([from, target]);
+			} catch (error) {
+				failed.push(from);
+				console.error(`WWE Project Board: ${from} ließ sich nicht umbenennen.`, error);
+			}
+		}
+
+		const leftovers: string[] = [];
+		for (const base of plan.bases) {
+			const data = await this.app.vault.process(base, (raw) => rewriteBase(raw, moves));
+			if (data.includes(LEGACY_COVER_NAME)) leftovers.push(base.path);
+		}
+
+		const lines = [`${moves.length} Deckblätter umbenannt.`];
+		if (plan.bases.length > 0) lines.push(`${plan.bases.length} Base-Dateien angepasst.`);
+		if (failed.length > 0) lines.push(`Fehlgeschlagen: ${failed.join(", ")}`);
+		if (plan.conflicts.length > 0) {
+			lines.push(`Übersprungen (Ziel existiert): ${plan.conflicts.join(", ")}`);
+		}
+		if (leftovers.length > 0) {
+			lines.push(`Bitte von Hand prüfen, dort steht noch _index: ${leftovers.join(", ")}`);
+		}
+		const stuck = failed.length + plan.conflicts.length + leftovers.length > 0;
+		new Notice(lines.join("\n"), stuck ? 0 : 8000);
 	}
 
 	private undecorate(view: MarkdownView): void {

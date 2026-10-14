@@ -1,6 +1,6 @@
 {
 	"name": "wwe-project-board",
-	"version": "1.0.5",
+	"version": "1.1.0",
 	"description": "Zeigt Base-Views als Projekt-Board mit Karten an.",
 	"main": "main.js",
 	"scripts": {

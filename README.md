@@ -11,12 +11,12 @@ von der Base gefilterten Dateien als Karten, gruppiert nach der Frontmatter-Eige
 zwischen Spalten zu ziehen schreibt den neuen Status ins Frontmatter. Darüber sitzt eine
 Leiste mit Volltextfilter über alle Frontmatter-Eigenschaften und einem Zoom.
 
-**Deckblatt-Ansicht** — jede `_index.md` mit `typ: projekt` wird beim Öffnen aufgeräumt:
+**Deckblatt-Ansicht** — jede Datei mit `typ: projekt` wird beim Öffnen aufgeräumt:
 Obsidians Dateiname und Eigenschaftenblock verschwinden, stattdessen gibt es eine eigene
 Kopfzeile mit Kunden-Chip und Projektnamen sowie ein einklappbares Panel links zum
 Bearbeiten der Eigenschaften. Der Markdown-Editor selbst bleibt Obsidians eigener.
 
-**Kundenseite** — jede `_index.md` mit `typ: kunde` bekommt dieselbe Behandlung, dazu
+**Kundenseite** — jede Datei mit `typ: kunde` bekommt dieselbe Behandlung, dazu
 rechts eine Liste der Projekte dieses Kunden als Karten.
 
 ## Erwartete Vault-Struktur
@@ -24,13 +24,22 @@ rechts eine Liste der Projekte dieses Kunden als Karten.
 ```
 <Kundenwurzel>/           z.B. "Kunden"
   <Kundenname>/
-    _index.md             typ: kunde
+    <Kundenname>.md       typ: kunde
     <Projektname>/
-      _index.md           typ: projekt
+      <Projektname>.md    typ: projekt
 ```
 
-Ordnernamen und die Eigenschaften `projekt` und `kunde` sollen übereinstimmen. Weichen
-sie ab, zeigt die Karte ein Warndreieck. Im Eigenschaften-Panel stehen beide Felder
+Deckblätter heißen wie ihr Ordner. So lassen sie sich von überall mit `[[Projekt 01]]`
+verlinken, und im Tab steht der echte Name. Haben zwei Kunden gleichnamige Projekte,
+ergänzt Obsidian beim Verlinken selbst so viel Pfad wie nötig.
+
+Erkannt wird ein Deckblatt allerdings nur an `typ` im Frontmatter, nicht am Dateinamen.
+Ein umbenannter Ordner, dessen Datei noch den alten Namen trägt, funktioniert also
+weiter. Gibt es in einem Ordner mehrere Dateien mit passendem `typ`, gewinnt die nach
+dem Ordner benannte.
+
+Ordnernamen, Dateiname und die Eigenschaften `projekt` und `kunde` sollen übereinstimmen.
+Weichen sie ab, zeigt die Karte ein Warndreieck. Im Eigenschaften-Panel stehen beide Felder
 deshalb hinter einem Schloss. Der Kundenwurzelordner ist nirgends fest verdrahtet — er
 wird aus den Daten erschlossen.
 
@@ -82,6 +91,37 @@ Danach Obsidian neu starten und das Plugin in den Einstellungen aktivieren.
 Der Workflow prüft, ob Tag und `manifest.json` übereinstimmen, und bricht sonst ab —
 denn BRAT sucht anhand der Version aus der `manifest.json` nach dem passenden Release.
 Laufen beide auseinander, findet BRAT nichts und meldet keinen brauchbaren Fehler.
+
+## Umstellung alter Vaults von `_index.md`
+
+Bis Version 1.0.x hießen alle Deckblätter `_index.md`. Der Befehl **„Deckblätter nach
+ihrem Ordner benennen"** stellt eine Vault um. Er zeigt erst eine Vorschau und legt
+dann los:
+
+- benennt jede `_index.md` mit `typ: projekt`/`kunde` nach ihrem Ordner um, über
+  Obsidians eigenes Umbenennen, damit Links nachgezogen werden;
+- überspringt Dateien, deren Zielname schon existiert, und meldet sie;
+- ersetzt in allen `.base`-Dateien die gespeicherten Pfade (Kartenreihenfolge) und
+  entfernt Filterzeilen der Form `- file.name == "_index"`;
+- schließt offene Base-Tabs vorher, weil die sonst ihre alte Konfiguration
+  zurückschreiben.
+
+Gibt es Links auf die alten Dateien und ist „Interne Links automatisch aktualisieren"
+(Einstellungen → Dateien und Links) aus, verweigert der Befehl den Start. Ohne die
+Einstellung würden die Links ins Leere zeigen. In neuen Vaults ist sie
+standardmäßig aus.
+
+Bis zur Umstellung trägt jede Karte ein Warndreieck „Datei heißt noch _index.md".
+
+**Ablauf für eine geteilte Vault:**
+
+1. Neue Plugin-Version veröffentlichen und auf **allen** Geräten installieren (BRAT:
+   „Check for updates"). Die neue Version versteht alte und neue Namen, deshalb ist
+   die Reihenfolge unkritisch.
+2. Backup der Vault anlegen.
+3. Auf **einem** Gerät den Befehl ausführen, Sync abwarten.
+4. Filter in `.base`-Dateien, die nicht in der Standardform vorlagen, nennt die
+   Abschlussmeldung. Die von Hand prüfen.
 
 ## Entwicklung
 
@@ -138,10 +178,12 @@ Da die Base-Datei den Pfad nicht über die API preisgibt, bekommt jede View beim
 Speichern eine eigene `boardId` in die `.base`-Datei geschrieben. Die dient als Schlüssel
 für den geräte-lokalen Zustand.
 
+Die Kartenreihenfolge merkt sich Dateipfade. Eine offene Board-View zieht sie nach, wenn
+eine Projektdatei oder einer ihrer Ordner umbenannt wird. Bei einer gerade nicht
+geöffneten Base geht das nicht: Die umbenannte Karte rutscht dort ans Spaltenende.
+
 ## Bekannte Grenzen
 
-- In der Tab-Leiste steht weiterhin `_index`. Den Tab-Titel kann ein Plugin nicht ändern,
-  ohne Obsidian-Interna zu patchen.
 - Es gibt keinen wiederverwendbaren Markdown-Editor in der API: `MarkdownEditView`
   verlangt im Konstruktor eine komplette `MarkdownView`. Deshalb bleibt Obsidians Editor
   stehen und nur das Drumherum wird ausgeblendet.
